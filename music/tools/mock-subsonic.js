@@ -115,9 +115,9 @@ function makeCover(seed, size = 320) {
 }
 
 // ---------- 假数据 ----------
-const ARTISTS = ['Lana Del Rey', '陈奕迅', '坂本龍一', 'The Weeknd', '李志', 'Daft Punk', '王菲', 'Radiohead'];
+const ARTISTS = ['Lorde', '陈奕迅', '坂本龍一', 'The Weeknd', '李志', 'Daft Punk', '王菲', 'Radiohead'];
 const ALBUMS = [
-  { id: 'a1', name: 'Norman Fucking Rockwell!', artist: 'Lana Del Rey', year: 2019 },
+  { id: 'a1', name: 'Melodrama', artist: 'Lorde', year: 2017 },
   { id: 'a2', name: '认了吧', artist: '陈奕迅', year: 2007 },
   { id: 'a3', name: 'async', artist: '坂本龍一', year: 2017 },
   { id: 'a4', name: 'After Hours', artist: 'The Weeknd', year: 2020 },
@@ -128,7 +128,7 @@ const ALBUMS = [
 ];
 
 const SONG_NAMES = {
-  a1: ['Norman fucking Rockwell', 'Mariners Apartment Complex', 'Venice Bitch', 'Fuck it I love you', 'Doin\' Time'],
+  a1: ['Green Light', 'Sober', 'The Louvre', 'Liability', 'Perfect Places'],
   a2: ['富士山下', '好久不见', '不如不见', '白色球鞋', '淘汰'],
   a3: ['andata', 'disintegration', 'solari', 'ZURE', 'walker'],
   a4: ['Blinding Lights', 'Save Your Tears', 'In Your Eyes', 'Faith', 'Alone Again'],
