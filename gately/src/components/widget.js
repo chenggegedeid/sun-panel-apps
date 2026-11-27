@@ -62,8 +62,14 @@ export class GatelyWidget extends SunPanelWidgetElement {
     this._load();
     // 设置页保存后会广播，卡片自己重读一遍绑定关系
     this._onSaved = () => this._load();
+    // 在另一台设备（比如手机上）改了默认服务器，这里收不到广播：
+    // 回到导航页时重读一次配置，才不会一直显示旧的那台
+    this._onVisible = () => {
+      if (!document.hidden) this._load();
+    };
     try {
       window.addEventListener(CONFIG_EVENT, this._onSaved);
+      document.addEventListener('visibilitychange', this._onVisible);
     } catch {
       /* 非浏览器环境 */
     }
@@ -81,6 +87,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
     this._detach = null;
     try {
       window.removeEventListener(CONFIG_EVENT, this._onSaved);
+      document.removeEventListener('visibilitychange', this._onVisible);
     } catch {
       /* ignore */
     }
@@ -918,6 +925,45 @@ export class GatelyWidget extends SunPanelWidgetElement {
     }
 
     /* 窄卡片（1x1 / 1x2）放不下一行两个指标块 */
+    /* 手机上的 1xfull：1080 宽的设计压到 340 会挤成一团，改成上下三段，指标只留 3 个 */
+    @container (max-width: 620px) {
+      /* 注意用 > 限定最外层：.chips 自己也带 .row 类，不加 > 会把指标条一起转成竖排 */
+      .size-1xfull > .row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+      }
+      .size-1xfull .rowhead {
+        width: 100%;
+        max-width: none;
+      }
+      .size-1xfull .rowtitle {
+        flex-direction: row;
+        align-items: baseline;
+        gap: 6px;
+      }
+      .size-1xfull > .row > .chips {
+        flex: none;
+        gap: 5px;
+      }
+      .size-1xfull > .row > .chips > .chip {
+        padding: 3px 6px;
+      }
+      .size-1xfull > .row > .chips > .chip:nth-child(n + 4) {
+        display: none;
+      }
+      .size-1xfull .rowchart {
+        width: 100%;
+        height: 30px;
+      }
+    }
+    /* 阈值按内容宽度算（390 的手机扣掉内边距只剩 362），别放太高 */
+    @container (max-width: 350px) {
+      .size-1xfull > .row > .chips > .chip:nth-child(n + 3) {
+        display: none;
+      }
+    }
+
     @container (max-width: 152px) {
       .chips {
         grid-template-columns: 1fr;

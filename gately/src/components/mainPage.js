@@ -1795,5 +1795,148 @@ export class GatelyMain extends SunPanelPageElement {
         display: none;
       }
     }
+    @media (max-width: 560px) {
+      /* 手机上窗口是全屏的，先保住可读性：留白收紧、字号降一档、横向能滑 */
+      .wrap {
+        padding: 12px 12px 16px;
+      }
+      /* .wrap 是 flex 列，内容超高时子项会被压扁（切换条/标签栏会缩成一条线） */
+      .wrap > .hdr,
+      .wrap > .srvbar,
+      .wrap > .tabs {
+        flex: none;
+      }
+      .hdr {
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .hname {
+        font-size: 15px;
+      }
+      .hact {
+        width: 100%;
+        gap: 6px;
+      }
+      .hact .btn {
+        height: 26px;
+        padding: 0 10px;
+        font-size: 11px;
+      }
+      .hact .chip {
+        font-size: 10.5px;
+      }
+      .grid4 {
+        gap: 8px;
+      }
+      .kpi {
+        padding: 9px 10px;
+      }
+      .kval {
+        font-size: 19px;
+      }
+      /* 切换条与标签横向滑动，别折成三行 */
+      .srvbar,
+      .tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding-bottom: 3px;
+      }
+      .srvbar::-webkit-scrollbar,
+      .tabs::-webkit-scrollbar {
+        display: none;
+      }
+      .srvtab,
+      .tab {
+        flex: none;
+      }
+      /* 表格横滑，列结构不动 */
+      .table {
+        overflow-x: auto;
+      }
+      .thead,
+      .trow {
+        min-width: 560px;
+        padding: 8px;
+        gap: 8px;
+      }
+      /* 手机上表格改成逐行卡片：名字/域名/状态左边，开关贴右 */
+      .thead {
+        display: none;
+      }
+      .table {
+        overflow-x: visible;
+      }
+      .trow {
+        min-width: 0;
+        grid-template-columns: minmax(0, 1fr) 46px;
+        grid-template-areas:
+          'name sw'
+          'dom  sw'
+          'up   sw';
+        row-gap: 3px;
+        padding: 9px 10px;
+      }
+      .trow .c-name {
+        grid-area: name;
+      }
+      .trow .c-dom {
+        grid-area: dom;
+        font-size: 10.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .trow .c-up {
+        grid-area: up;
+      }
+      .trow .c-num {
+        display: none;
+      }
+      .trow .c-sw {
+        grid-area: sw;
+        align-self: center;
+        justify-self: end;
+      }
+      /* 窄屏不再用 flex 分配剩余高度（那样会把下面的卡片压上来重叠），改成整页滚动 */
+      .body.ov,
+      .body.ov > .row2 {
+        display: block;
+        flex: none;
+        min-height: 0;
+      }
+      .body.ov > .row2 > .card {
+        display: block;
+        margin-bottom: 10px;
+      }
+      .body.ov .plist {
+        display: block;
+        flex: none;
+      }
+      .body.ov .prow {
+        display: flex;
+        align-items: center;
+        padding: 6px 0;
+      }
+      .body.ov .prow + .prow {
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      /* 图表在 block 布局下 height:100% 会塌，给个固定高度 */
+      .chart.fill {
+        height: 150px;
+        flex: none;
+      }
+      .grid4.low {
+        margin-top: 0;
+      }
+      /* iOS 上输入框小于 16px 会触发页面自动放大 */
+      .inp {
+        font-size: 16px;
+        height: 38px;
+      }
+      .banform .row .inp {
+        flex: 1 1 100%;
+      }
+    }
   `;
 }

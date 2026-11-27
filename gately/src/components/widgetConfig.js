@@ -519,7 +519,10 @@ export class GatelyConfig extends SunPanelPageElement {
     (o) => html`<option value=${o.id} ?selected=${o.id === this.cardServerId}>${o.label}</option>`,
   )}
               </select>`,
-    '同一台机器摆两张卡也可以，比如一张只看 CPU、一张只看请求',
+    // 把规则写在脸上：到底跟不跟随默认，一眼能看出为什么改默认没反应
+    this.cardServerId
+      ? '这张卡片锁定了上面这台。改全局默认不会影响它；想让它跟着默认走，就选「跟随默认」'
+      : '这张卡片跟随默认，改默认它会跟着变；新添加的卡片默认也是跟随',
   )}
           </div>`
     : ''}
@@ -1268,6 +1271,56 @@ export class GatelyConfig extends SunPanelPageElement {
       align-items: center;
       gap: 12px;
       padding: 4px 2px 8px;
+    }
+
+    /* 手机上设置页会全屏，按钮和输入框都要能点得准 */
+    @media (max-width: 560px) {
+      .wrap {
+        padding: 14px 12px 20px;
+      }
+      .head {
+        flex-direction: column;
+        gap: 8px;
+      }
+      .head h1 {
+        font-size: 17px;
+      }
+      .card {
+        padding: 12px 12px 14px;
+      }
+      .card-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 3px;
+      }
+      .pair {
+        grid-template-columns: 1fr;
+      }
+      .srv-head {
+        flex-wrap: wrap;
+      }
+      .srv-head .name {
+        flex: 1 1 100%;
+      }
+      .srv-line {
+        flex-wrap: wrap;
+      }
+      .srv-line .inp {
+        flex: 1 1 100%;
+      }
+      /* iOS 上输入框小于 16px 会触发页面自动放大 */
+      .inp {
+        font-size: 16px;
+        height: 38px;
+      }
+      .ghost.small,
+      .primary {
+        height: 38px;
+      }
+      .msg,
+      .fhint {
+        font-size: 11.5px;
+      }
     }
   `;
 }
