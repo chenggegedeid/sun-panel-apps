@@ -92,6 +92,23 @@
       const current = queue[0];
 
       // 让卡片和窗口都进入“正在播放”状态，不需要真的解码音频
+      const LINES = [
+        [0, ''],
+        [12.4, '夏天的下午 你在我身边'],
+        [16.8, '风把窗帘吹起来'],
+        [21.2, '我们什么也没说'],
+        [25.6, '只是听着这首歌'],
+        [30.0, '那时候以为时间很慢'],
+        [34.5, '慢到可以一直这样'],
+        [39.0, '后来才知道'],
+        [43.5, '那是我们最好的日子'],
+        [48.0, '有些话没说出口'],
+        [52.5, '就一直没说出口'],
+        [57.0, '再听见这首歌的时候'],
+        [61.5, '还是会想起那个下午'],
+      ];
+      const lyrics = { synced: true, lines: LINES.map(([start, text]) => ({ start, text })) };
+
       player.snapshot = () => ({
         cur: current,
         playing: true,
@@ -102,7 +119,10 @@
         queue,
         index: 0,
         server,
-        lyricLine: '岁月在默数三四五六',
+        mode: 'order',
+        volume: 0.8,
+        lyrics,
+        lyricLine: '那是我们最好的日子',
       });
       player.server = server;
       player.queue = queue;

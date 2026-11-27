@@ -3,10 +3,6 @@ import { SunPanelPageElement } from '@sun-panel/micro-app';
 import {
   normalizeServers,
   activeServer,
-  getAlbums,
-  getAlbum,
-  search,
-  getLyrics,
   coverUrl,
   fmtTime,
   hostOf,
@@ -16,19 +12,10 @@ import {
 import {
   listFor,
   albumFor,
-  lyricsFor,
   tabsFor,
-  isJianting,
   coverFor,
 } from '../utils/provider.js';
 import { player } from '../utils/player.js';
-
-const TABS = [
-  { key: 'newest', label: '最新' },
-  { key: 'recent', label: '最近播放' },
-  { key: 'frequent', label: '最常听' },
-  { key: 'alphabeticalByName', label: '按名称' },
-];
 
 export class MusicMain extends SunPanelPageElement {
   static properties = {
@@ -72,7 +59,6 @@ export class MusicMain extends SunPanelPageElement {
     this._unsub = null;
     this.lyrics = null;
     this.showLyrics = false;
-    this._lyricsFor = '';
     this._lyricIdx = -1;
     this._lyricHoldUntil = 0;
     this.dragging = false;
@@ -144,9 +130,8 @@ export class MusicMain extends SunPanelPageElement {
       this.queue = snap.queue;
       this.qIndex = snap.index;
       if (snap.error) this.error = snap.error;
-      // 把当前歌词行同步给播放器，卡片上也能看到
-      const li = this._lineIndex();
-      player.setLyricLine(li >= 0 && this.lyrics?.lines?.[li] ? this.lyrics.lines[li].text : '');
+      // 歌词由播放器统一加载（不开窗口卡片也能显示），这里跟着渲染就行
+      this.lyrics = snap.lyrics || null;
       // 只有进度在变时限流重渲染，避免整页每 240ms 重绘一次
       const sig = `${snap.cur?.id}|${snap.playing}|${snap.loading}|${snap.error}|${snap.queue.length}|${snap.index}|${snap.mode}`;
       if (sig === this._sig) {
@@ -164,38 +149,12 @@ export class MusicMain extends SunPanelPageElement {
         this.dragValue = null;
         this._lyricIdx = -1;
         this._lyricHoldUntil = 0;
-        this._loadLyrics();
       }
       this.requestUpdate();
     });
   }
 
   // ---------- 歌词 ----------
-  async _loadLyrics() {
-    const song = this.cur;
-    if (!song) {
-      this.lyrics = null;
-      this._lyricsFor = '';
-      return;
-    }
-    const id = song.id;
-    this._lyricsFor = id;
-    this.lyrics = null;
-    this._lyricIdx = -1;
-    this.requestUpdate();
-    try {
-      const r = isJianting(this.server)
-        ? this._parseLrc(await lyricsFor(this.server, song))
-        : await getLyrics(this.server, song);
-      if (this._lyricsFor === id) {
-        this.lyrics = r;
-        this.requestUpdate();
-      }
-    } catch {
-      /* 没有歌词不算错误 */
-    }
-  }
-
   _lineIndex() {
     const L = this.lyrics;
     if (!L || !L.synced) return -1;
@@ -208,27 +167,33 @@ export class MusicMain extends SunPanelPageElement {
     return idx;
   }
 
-  _toggleLyrics() {
+  async _toggleLyrics() {
     this.showLyrics = !this.showLyrics;
-    if (this.showLyrics && !this.lyrics && this.cur) this._loadLyrics();
     this.requestUpdate();
-    setTimeout(() => this._scrollLyric(true), 60);
+    if (this.showLyrics) {
+      // 等面板真的渲染出来再滚，否则找不到 .ly-box
+      await this.updateComplete;
+      this._scrollLyric(true);
+    }
   }
 
   _scrollLyric(force = false) {
     // 用户手动滚过歌词就暂停跟随，5 秒后再接管，避免抢滚动
     if (!force && Date.now() < this._lyricHoldUntil) return;
     const idx = this._lineIndex();
+    if (idx < 0) return;
     if (!force && idx === this._lyricIdx) return;
-    this._lyricIdx = idx;
     const box = this.renderRoot?.querySelector('.ly-box');
     if (!box) return;
     const el = box.querySelector('.ly-line.on');
     if (!el) return;
-    box.scrollTo({
-      top: Math.max(0, el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2),
-      behavior: 'smooth',
-    });
+    this._lyricIdx = idx;
+    // 用 rect 算相对位置，避免 offsetParent 不在 ly-box 上导致算错
+    const r = el.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    const top = box.scrollTop + (r.top - b.top) - (b.height - r.height) / 2;
+    // 打开面板时直接跳到位，之后跟随播放才用平滑滚动
+    box.scrollTo({ top: Math.max(0, top), behavior: force ? 'auto' : 'smooth' });
   }
 
   updated() {
@@ -244,6 +209,7 @@ export class MusicMain extends SunPanelPageElement {
     this.duration = snap.duration;
     this.queue = snap.queue;
     this.qIndex = snap.index;
+    this.lyrics = snap.lyrics || null;
   }
 
   onDisconnected() {
@@ -497,30 +463,6 @@ export class MusicMain extends SunPanelPageElement {
         ${!this.songs.length ? html`<div class="empty">没有找到歌曲</div>` : ''}
       </div>
     `;
-  }
-
-  /** LRC 文本 → 与结构化歌词一致的格式 */
-  _parseLrc(text) {
-    if (!text) return null;
-    const lines = [];
-    const re = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
-    let synced = false;
-    for (const raw of String(text).split(/\r?\n/)) {
-      const tags = [...raw.matchAll(re)];
-      const content = raw.replace(re, '').trim();
-      if (!tags.length) {
-        if (content) lines.push({ start: null, text: content });
-        continue;
-      }
-      synced = true;
-      for (const m of tags) {
-        const sec = Number(m[1]) * 60 + Number(m[2]) + Number(m[3] || 0) / 1000;
-        lines.push({ start: sec, text: content });
-      }
-    }
-    if (!lines.length) return null;
-    if (synced) lines.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
-    return { synced, lines };
   }
 
   _albumGrid() {

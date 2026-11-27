@@ -30,6 +30,7 @@ import {
   getLyrics as subsonicLyrics,
 } from './subsonic.js';
 import * as jt from './jianting.js';
+import { parseLrc } from './lrc.js';
 
 // ---------- Subsonic 系（Navidrome / Gonic / Airsonic / Jellyfin / 飞牛音乐） ----------
 const subsonic = {
@@ -72,6 +73,9 @@ const subsonic = {
     const r = await subsonicLyrics(server, song?.raw || song);
     return r?.lrc || r?.text || '';
   },
+
+  /** 结构化歌词（优先带时间轴），播放器与歌词面板共用 */
+  lyricsData: (server, song) => subsonicLyrics(server, song?.raw || song),
 };
 
 function toSong(s = {}) {
@@ -113,6 +117,10 @@ const jianting = {
   play: (server, song) => jt.playUrl(server, song.raw || song),
   cover: (server, song) => song?.cover || '',
   lyrics: (server, song) => jt.lyrics(server, song.raw || song),
+
+  async lyricsData(server, song) {
+    return parseLrc(await jt.lyrics(server, song.raw || song));
+  },
 };
 
 function toJtSong(s) {
@@ -172,6 +180,12 @@ export function albumFor(server, id) {
 
 export function lyricsFor(server, song) {
   return getProvider(server).lyrics(server, song);
+}
+
+/** 结构化歌词：{ synced, lines:[{start,text}] } 或 null */
+export function lyricsDataFor(server, song) {
+  const p = getProvider(server);
+  return p.lyricsData ? p.lyricsData(server, song) : Promise.resolve(null);
 }
 
 export function tabsFor(server) {

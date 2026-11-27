@@ -7,7 +7,8 @@
  * 关掉播放窗口不会中断，多张卡片看到的是同一个播放状态。
  */
 import { getRandomSongs } from './subsonic.js';
-import { streamFor, coverFor, listFor, getProvider } from './provider.js';
+import { streamFor, coverFor, listFor, getProvider, lyricsDataFor } from './provider.js';
+import { currentLine } from './lrc.js';
 
 class Player {
   constructor() {
@@ -21,7 +22,10 @@ class Player {
     this._lastEmit = 0;
     this.mode = 'order';   // order | single | shuffle
     this.volume = 0.8;
-    this.lyricLine = '';
+    // 歌词跟着歌曲走，卡片和窗口都从这里取，不依赖窗口是否打开
+    this.lyrics = null;
+    this._lyricsFor = '';
+    this._lyricsCache = new Map();
   }
 
   get cur() {
@@ -39,6 +43,11 @@ class Player {
   get duration() {
     const d = this._audio?.duration;
     return Number.isFinite(d) && d > 0 ? d : this.cur?.duration || 0;
+  }
+
+  /** 当前唱到的那句词，卡片上直接显示 */
+  get lyricLine() {
+    return currentLine(this.lyrics, this.progress).text;
   }
 
   subscribe(fn) {
@@ -73,6 +82,7 @@ class Player {
       server: this.server,
       mode: this.mode,
       volume: this.volume,
+      lyrics: this.lyrics,
       lyricLine: this.lyricLine,
     };
   }
@@ -167,6 +177,8 @@ class Player {
     a.volume = this.volume;
     const seq = (this._seq = (this._seq || 0) + 1);
     this._syncMediaSession();
+    // 歌词和播放地址并行取，卡片刻就等歌词
+    this._loadLyrics(song);
 
     let url = '';
     try {
@@ -268,14 +280,39 @@ class Player {
     a.src = '';
     this.queue = [];
     this.index = -1;
+    this.lyrics = null;
+    this._lyricsFor = '';
     this._emit(true);
   }
 
-  /** 当前歌词行（卡片上显示用） */
-  setLyricLine(text) {
-    const t = (text || '').trim();
-    if (t === this.lyricLine) return;
-    this.lyricLine = t;
+  /**
+   * 取当前歌曲的歌词（跟播放地址并行，互不阻塞）
+   * 拿到的结果按「服务器 + 歌曲」缓存，重播不用再请求
+   */
+  async _loadLyrics(song) {
+    const key = `${this.server?.id || ''}|${song.id}`;
+    if (this._lyricsFor === key) return;
+    this._lyricsFor = key;
+
+    if (this._lyricsCache.has(key)) {
+      this.lyrics = this._lyricsCache.get(key);
+      this._emit(true);
+      return;
+    }
+
+    this.lyrics = null;
+    this._emit(true);
+    try {
+      const r = await lyricsDataFor(this.server, song);
+      if (this._lyricsFor !== key) return;
+      this.lyrics = r || null;
+      if (this._lyricsCache.size > 60) this._lyricsCache.clear();
+      this._lyricsCache.set(key, this.lyrics);
+    } catch {
+      // 没有歌词不算错误，下次播这首再试
+      if (this._lyricsFor !== key) return;
+      this.lyrics = null;
+    }
     this._emit(true);
   }
 
