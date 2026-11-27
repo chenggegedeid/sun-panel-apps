@@ -9,7 +9,7 @@
     "build": "vite build",
     "build:dev": "npm run build:test",
     "build:test": "cross-env NODE_ENV=development VITE_MICRO_MODE=test vite build --mode development",
-    "icon": "node build/make-icon.mjs",
+    "icon": "node build/make-icon.mjs vinyl icon.png",
     "pack": "npm run icon && npm run build && node build/pack.js",
     "pack:dev": "npm run pack:test",
     "pack:test": "npm run icon && cross-env NODE_ENV=development node build/build.js --yes && npm run build:test && cross-env NODE_ENV=development node build/pack.js",

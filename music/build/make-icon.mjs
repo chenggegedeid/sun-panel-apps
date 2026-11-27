@@ -224,7 +224,8 @@ const VARIANTS = {
   },
 };
 
-const name = process.argv[2] || 'note';
+// 默认产出定稿方案（黑胶唱片），打包时 npm run icon 不会再退回音符方案
+const name = process.argv[2] || 'vinyl';
 const outName = process.argv[3] || (name === 'note' ? 'icon.png' : `icon-${name}.png`);
 
 VARIANTS[name]();
