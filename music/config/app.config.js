@@ -9,7 +9,7 @@ export default {
   author: 'chenggegedeid',
   // 应用唯一标识
   microAppId: 'chenggegedeid-Music',
-  version: '3.0.1',
+  version: '3.0.2',
   entry: 'main.js',
   icon: 'icon.png',
   debug: false,

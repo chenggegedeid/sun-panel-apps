@@ -1,7 +1,7 @@
 import { SunPanelWidgetElement } from '@sun-panel/micro-app';
 import { html, css } from 'lit';
 import { buildTheme, resolveConfig } from '../utils/theme.js';
-import { normalizeServers, activeServer, coverUrl, fmtTime, hostOf,
+import { normalizeServers, activeServer, fmtTime,
   setRequestAdapter,
 } from '../utils/subsonic.js';
 import { coverFor } from '../utils/provider.js';
@@ -126,73 +126,124 @@ export class MusicWidget extends SunPanelWidgetElement {
   }
 
   // ---------- 片段 ----------
-  _cover(size) {
-    const s = this.server;
-    const song = this.ps.cur;
-    const key = song?.id;
-    const bad = key && this._badCovers?.has(key);
-    const url = s && song && !bad ? coverFor(s, song, size * 2) : '';
-    if (url) {
-      return html`<img
-        class="cov"
-        style="width:${size}px;height:${size}px"
-        src=${url}
-        alt=""
-        @error=${() => {
-    this._badCovers.add(key);
-    this.requestUpdate();
-  }}
-      />`;
+  _icon(kind, size) {
+    const w = Math.round(size * 0.4);
+    if (kind === 'play') {
+      return html`<svg width="${w}" height="${w + 2}" viewBox="0 0 11 12"><path d="M1 1l9 5-9 5z" fill="currentColor"/></svg>`;
     }
-    return html`<div class="cov ph" style="width:${size}px;height:${size}px">♪</div>`;
+    if (kind === 'pause') {
+      return html`<svg width="${w}" height="${w}" viewBox="0 0 10 12">
+        <rect x="0" y="0" width="3.2" height="12" rx="1.2" fill="currentColor"/>
+        <rect x="6.8" y="0" width="3.2" height="12" rx="1.2" fill="currentColor"/>
+      </svg>`;
+    }
+    if (kind === 'next') {
+      return html`<svg width="${w}" height="${w}" viewBox="0 0 11 11">
+        <path d="M1 0.6l7 4.9L1 10.4z" fill="currentColor"/>
+        <rect x="9" y="0.6" width="1.8" height="9.8" rx="0.9" fill="currentColor"/>
+      </svg>`;
+    }
+    return html`<svg width="${w}" height="${w}" viewBox="0 0 11 11">
+      <path d="M10 0.6L3 5.5 10 10.4z" fill="currentColor"/>
+      <rect x="0.2" y="0.6" width="1.8" height="9.8" rx="0.9" fill="currentColor"/>
+    </svg>`;
   }
 
   _btn(kind, size = 30) {
     const map = {
-      prev: { icon: '⏮', fn: (e) => this._prev(e), label: '上一首', dis: !this.ps.queue.length },
-      play: { icon: this.ps.playing ? '⏸' : '▶', fn: (e) => this._toggle(e), label: '播放/暂停', dis: false },
-      next: { icon: '⏭', fn: (e) => this._next(e), label: '下一首', dis: false },
+      prev: { fn: (e) => this._prev(e), label: '上一首', dis: !this.ps.queue.length },
+      play: { fn: (e) => this._toggle(e), label: '播放/暂停', dis: false },
+      next: { fn: (e) => this._next(e), label: '下一首', dis: false },
     };
     const b = map[kind];
+    const glyph = kind === 'play' && this.ps.playing ? 'pause' : kind;
     return html`<button
       class="pb ${kind === 'play' ? 'main' : ''}"
-      style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px"
+      style="width:${size}px;height:${size}px;background:rgba(255,255,255,${kind === 'play' ? 0.24 : 0.16});border:none;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)"
       title=${b.label}
       ?disabled=${b.dis}
       @click=${b.fn}
     >
-      ${b.icon}
+      ${this._icon(glyph, size)}
     </button>`;
   }
 
-  _bar(h = 3) {
-    const d = this.ps.duration || 1;
-    const p = Math.min(100, ((this.ps.progress || 0) / d) * 100);
-    return html`<div class="bar" style="height:${h}px"><i style="width:${p}%"></i></div>`;
+  /** 封面平均亮度，用来决定遮罩深浅（0 暗 / 1 亮） */
+  _lum() {
+    const id = this.ps.cur?.id;
+    return (id && this._lumCache?.get(id)) ?? 0.35;
   }
 
-  _title(kind = 'sm') {
+  _measureLum(img, id) {
+    if (!img || !id || this._lumCache?.has(id)) return;
+    try {
+      const c = document.createElement('canvas');
+      c.width = 12;
+      c.height = 12;
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0, 12, 12);
+      const d = g.getImageData(0, 0, 12, 12).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        sum += (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      }
+      if (!this._lumCache) this._lumCache = new Map();
+      this._lumCache.set(id, sum / (d.length / 4));
+      this.requestUpdate();
+    } catch {
+      /* 跨域图片取不到像素，用默认值 */
+    }
+  }
+
+  /** 铺满整卡的封面 + 渐变遮罩 */
+  _bg(vertical = true) {
     const song = this.ps.cur;
-    const name = song ? song.title : this.server?.name || '音乐';
-    const sub = song ? song.artist : kind === 'xs' ? '点此播放' : '点一下开始播放';
+    const url = this.server && song ? coverFor(this.server, song, 600) : '';
+    const dark = this._lum() > 0.62 ? 0.82 : 0.68;
+    // 横向卡片文字都在左侧，遮罩必须左深右浅，否则标题压在亮部看不清
+    const grad = vertical
+      ? `linear-gradient(180deg, rgba(0,0,0,0) 28%, rgba(0,0,0,${(dark - 0.2).toFixed(2)}) 62%, rgba(0,0,0,${dark}) 100%)`
+      : `linear-gradient(90deg, rgba(0,0,0,${dark}) 0%, rgba(0,0,0,${(dark - 0.18).toFixed(2)}) 55%, rgba(0,0,0,${(dark - 0.3).toFixed(2)}) 100%)`;
     return html`
-      <div class="meta">
-        <div class="tt ${kind}">${name}</div>
-        <div class="st">${sub}</div>
-        ${this.ps.lyricLine && kind !== 'xs'
-    ? html`<div class="lrc">${this.ps.lyricLine}</div>`
-    : ''}
-      </div>
+      ${url
+    ? html`<img
+            src=${url}
+            alt=""
+            style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"
+            @load=${(e) => this._measureLum(e.target, this.ps.cur?.id)}
+            @error=${() => {
+    this._badCovers.add(this.ps.cur?.id);
+    this.requestUpdate();
+  }}
+          />`
+    : html`<div style="position:absolute;inset:0;background:rgba(120,120,140,0.25)"></div>`}
+      <div style="position:absolute;inset:0;background:${grad}"></div>
     `;
+  }
+
+  _lyric(size = 11.5, max = 1) {
+    const t = this.ps.lyricLine;
+    if (!t) return '';
+    return html`<div style="font-size:${size}px;color:rgba(255,255,255,0.58);margin-top:6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:${max};-webkit-box-orient:vertical;overflow:hidden">${t}</div>`;
+  }
+
+  _progBottom(h = 2) {
+    const d = this.ps.duration || 1;
+    const p = Math.min(100, ((this.ps.progress || 0) / d) * 100);
+    return html`<div style="position:absolute;left:0;right:0;bottom:0;height:${h}px;background:rgba(255,255,255,0.18)">
+      <div style="width:${p}%;height:100%;background:rgba(255,255,255,0.9)"></div>
+    </div>`;
   }
 
   // ---------- 各尺寸 ----------
   render1x1() {
     const song = this.ps.cur;
+    const art = this.server && song ? coverFor(this.server, song, 160) : '';
     return html`
       <div class="s1" @click=${(e) => this._toggle(e)}>
-        <button class="pb main" style="width:42px;height:42px;font-size:15px">
-          ${this.ps.playing ? '⏸' : '▶'}
+        ${art ? html`<img class="s1art" src=${art} alt="" />` : ''}
+        <button class="pb main s1pb" title="播放/暂停">
+          ${this._icon(this.ps.playing ? 'pause' : 'play', 40)}
         </button>
         <div class="tt xs">${song ? song.title : '音乐'}</div>
       </div>
@@ -200,81 +251,160 @@ export class MusicWidget extends SunPanelWidgetElement {
   }
 
   render1x2() {
+    const cur = this.ps.cur;
     return html`
-      <div class="s1x2">
-        <div class="covwrap" @click=${() => this._open()}>${this._cover(64)}</div>
-        ${this._title('xs')}
-        <div class="ctrls">${this._btn('prev', 22)}${this._btn('play', 28)}${this._btn('next', 22)}</div>
+      <div style="position:relative;width:100%;height:100%;overflow:hidden;border-radius:inherit" @click=${() => this._open()}>
+        ${this._bg(true)}
+        <div style="position:absolute;left:0;right:0;bottom:0;padding:9px 10px 12px">
+          <div style="font-size:12.5px;font-weight:500;color:#fff;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${cur ? cur.title : this.server?.name || '音乐'}
+          </div>
+          <div style="font-size:10.5px;color:rgba(255,255,255,0.72);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${cur ? cur.artist : '点此播放'}
+          </div>
+          ${this._lyric(10.5, 2)}
+          <div style="display:flex;gap:6px;margin-top:9px">
+            ${this._btn('play', 27)}${this._btn('next', 21)}
+          </div>
+        </div>
+        ${this._progBottom(2)}
       </div>
     `;
   }
 
   render2x1() {
+    const cur = this.ps.cur;
+    const art = this.server && cur ? coverFor(this.server, cur, 140) : '';
     return html`
-      <div class="s2x1">
-        <div class="covwrap" @click=${() => this._open()}>${this._cover(44)}</div>
-        <div class="grow" @click=${() => this._open()}>
-          <div class="meta">
-            <div class="tt sm">${this.ps.cur ? this.ps.cur.title : this.server?.name || '音乐'}</div>
-          </div>
+      <div class="row21" @click=${() => this._open()}>
+        ${this._bg(false)}
+        <div class="fullart sm">
+          ${art ? html`<img src=${art} alt="" />` : html`<span>♪</span>`}
         </div>
-        <div class="ctrls">${this._btn('play', 28)}${this._btn('next', 22)}</div>
+        <div class="fulltxt">
+          <div class="fulltt">
+            <span class="n">${cur ? cur.title : this.server?.name || '音乐'}</span>
+            ${cur && cur.artist ? html`<span class="a">${cur.artist}</span>` : ''}
+          </div>
+          <div class="fullsub">${this.ps.lyricLine || (cur ? cur.album || '正在播放' : '点一下开始播放')}</div>
+        </div>
+        <div class="ctl21">
+          ${this._btn('play', 30)}${this._btn('next', 22)}
+        </div>
+        ${this._progBottom(2)}
       </div>
     `;
   }
 
   render2x2() {
+    const cur = this.ps.cur;
     return html`
-      <div class="s2x2">
-        <div class="covwrap" @click=${() => this._open()}>${this._cover(86)}</div>
-        <div @click=${() => this._open()}>${this._title('sm')}</div>
-        <div class="ctrls">${this._btn('prev', 28)}${this._btn('play', 38)}${this._btn('next', 28)}</div>
+      <div style="position:relative;width:100%;height:100%;overflow:hidden;border-radius:inherit" @click=${() => this._open()}>
+        ${this._bg(true)}
+        <div style="position:absolute;left:0;right:0;bottom:0;padding:12px 14px 15px">
+          <div style="font-size:14px;font-weight:500;color:#fff;line-height:1.28;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${cur ? cur.title : this.server?.name || '音乐'}
+          </div>
+          <div style="font-size:11.5px;color:rgba(255,255,255,0.72);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${cur ? cur.artist : '点一下开始播放'}
+          </div>
+          ${this._lyric(11.5, 2)}
+          <div style="display:flex;gap:8px;margin-top:11px;align-items:center">
+            ${this._btn('prev', 26)}${this._btn('play', 34)}${this._btn('next', 26)}
+          </div>
+        </div>
+        ${this._progBottom(2)}
       </div>
     `;
   }
 
+  /** 大字歌词：2x4 用 */
   render2x4() {
+    const cur = this.ps.cur;
+    const url = this.server && cur ? coverFor(this.server, cur, 600) : '';
     return html`
-      <div class="s2x4">
-        <div class="row">
-          <div class="covwrap" @click=${() => this._open()}>${this._cover(86)}</div>
-          <div class="grow" @click=${() => this._open()}>${this._title('lg')}</div>
+      <div style="position:relative;width:100%;height:100%;overflow:hidden;border-radius:inherit" @click=${() => this._open()}>
+        ${url
+    ? html`<img src=${url} alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(30px) brightness(0.5) saturate(1.25);transform:scale(1.35)" />`
+    : ''}
+        <div style="position:absolute;inset:0;background:rgba(8,8,12,0.34)"></div>
+        <div style="position:absolute;left:22px;top:16px;font-size:10.5px;letter-spacing:0.08em;color:rgba(255,255,255,0.5)">NOW PLAYING</div>
+        <div style="position:absolute;left:22px;right:22px;top:50%;transform:translateY(-56%)">
+          <div style="font-size:27px;font-weight:500;color:#fff;line-height:1.45;letter-spacing:0.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+            ${this.ps.lyricLine || (cur ? cur.title : '点一下开始播放')}
+          </div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${cur ? `${cur.title} · ${cur.artist}` : ''}
+          </div>
         </div>
-        <div class="prog">
-          ${this._bar(4)}
-          <div class="times"><span>${fmtTime(this.ps.progress)}</span><span>${fmtTime(this.ps.duration)}</span></div>
+        <div style="position:absolute;left:22px;right:22px;bottom:18px;display:flex;align-items:center;gap:11px">
+          ${this._btn('play', 26)}
+          <div style="flex:1;height:2px;background:rgba(255,255,255,0.18);border-radius:2px">
+            <div style="width:${Math.min(100, ((this.ps.progress || 0) / (this.ps.duration || 1)) * 100)}%;height:100%;background:rgba(255,255,255,0.85);border-radius:2px"></div>
+          </div>
+          <div style="font-size:10.5px;color:rgba(255,255,255,0.55);flex:none;font-variant-numeric:tabular-nums">
+            ${fmtTime(this.ps.progress)} / ${fmtTime(this.ps.duration)}
+          </div>
         </div>
-        <div class="ctrls">${this._btn('prev', 30)}${this._btn('play', 40)}${this._btn('next', 30)}</div>
       </div>
     `;
   }
 
+  /** 大字歌词：4x4 用，多一行预备歌词 */
   render4x4() {
+    const cur = this.ps.cur;
+    const url = this.server && cur ? coverFor(this.server, cur, 600) : '';
     return html`
-      <div class="s4x4">
-        <div class="covwrap" @click=${() => this._open()}>${this._cover(150)}</div>
-        <div @click=${() => this._open()}>${this._title('xl')}</div>
-        <div class="prog">
-          ${this._bar(4)}
-          <div class="times"><span>${fmtTime(this.ps.progress)}</span><span>${fmtTime(this.ps.duration)}</span></div>
+      <div style="position:relative;width:100%;height:100%;overflow:hidden;border-radius:inherit" @click=${() => this._open()}>
+        ${url
+    ? html`<img src=${url} alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(34px) brightness(0.45) saturate(1.3);transform:scale(1.4)" />`
+    : ''}
+        <div style="position:absolute;inset:0;background:rgba(8,8,12,0.34)"></div>
+        <div style="position:absolute;left:30px;top:26px;font-size:11px;letter-spacing:0.1em;color:rgba(255,255,255,0.45)">NOW PLAYING</div>
+        <div style="position:absolute;left:30px;right:30px;top:50%;transform:translateY(-54%)">
+          <div style="font-size:34px;font-weight:500;color:#fff;line-height:1.42;letter-spacing:0.01em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">
+            ${this.ps.lyricLine || (cur ? cur.title : '点一下开始播放')}
+          </div>
+          <div style="font-size:13px;color:rgba(255,255,255,0.36);margin-top:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${cur ? `${cur.title} · ${cur.artist}` : ''}
+          </div>
         </div>
-        <div class="ctrls">${this._btn('prev', 34)}${this._btn('play', 46)}${this._btn('next', 34)}</div>
+        <div style="position:absolute;left:30px;right:30px;bottom:26px;display:flex;align-items:center;gap:12px">
+          ${this._btn('prev', 24)}${this._btn('play', 34)}${this._btn('next', 24)}
+          <div style="flex:1;height:2px;background:rgba(255,255,255,0.18);border-radius:2px;margin-left:4px">
+            <div style="width:${Math.min(100, ((this.ps.progress || 0) / (this.ps.duration || 1)) * 100)}%;height:100%;background:rgba(255,255,255,0.85);border-radius:2px"></div>
+          </div>
+        </div>
       </div>
     `;
   }
 
   render1xfull() {
+    const cur = this.ps.cur;
     const s = this.server;
+    const art = s && cur ? coverFor(s, cur, 200) : '';
+    // 极扁的横幅上 object-fit:cover 只会裁出一条放大的碎块，靠模糊虚化压成底色
+    const bgUrl = s && cur ? coverFor(s, cur, 600) : '';
+    const d = this.ps.duration || 1;
+    const p = Math.min(100, ((this.ps.progress || 0) / d) * 100);
+    const sub = this.ps.lyricLine || (cur ? cur.album || '正在播放' : '点一下开始播放');
     return html`
-      <div class="sfull">
-        <div class="covwrap" @click=${() => this._open()}>${this._cover(48)}</div>
-        <div class="grow" @click=${() => this._open()}>
-          <div class="tt sm">${this.ps.cur ? this.ps.cur.title : s?.name || '音乐'}</div>
-          <div class="st">${this.ps.cur ? this.ps.cur.artist : hostOf(s?.url || '')}</div>
+      <div class="full" @click=${() => this._open()}>
+        ${bgUrl ? html`<img class="fullbg" src=${bgUrl} alt="" />` : ''}
+        <div class="fullscrim"></div>
+        <div class="fullart">
+          ${art ? html`<img src=${art} alt="" />` : html`<span>♪</span>`}
         </div>
-        <div class="mid">${this._bar(3)}</div>
-        <div class="times sm"><span>${fmtTime(this.ps.progress)}</span><span>${fmtTime(this.ps.duration)}</span></div>
-        <div class="ctrls">${this._btn('prev', 26)}${this._btn('play', 34)}${this._btn('next', 26)}</div>
+        <div class="fullhead">
+          <span class="n">${cur ? cur.title : s?.name || '音乐'}</span>
+          <span class="a">${cur ? cur.artist || '' : ''}</span>
+        </div>
+        <div class="fullyric">${sub}</div>
+        <div class="fullside">
+          <span class="fulltime">${fmtTime(this.ps.progress)} / ${fmtTime(this.ps.duration)}</span>
+          ${this._btn('prev', 26)}${this._btn('play', 32)}${this._btn('next', 26)}
+        </div>
+        <div class="fullbar"><i style="width:${p}%"></i></div>
       </div>
     `;
   }
@@ -585,6 +715,222 @@ export class MusicWidget extends SunPanelWidgetElement {
       align-items: center;
       gap: 10px;
       min-width: 0;
+    }
+
+    /* ---------- 1xfull / 2x1 共用：通栏横幅 ---------- */
+    .container.size-1xfull,
+    .container.size-1x1,
+    .container.size-2x1 {
+      padding: 0;
+    }
+    .full,
+    .row21 {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      border-radius: inherit;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .full {
+      padding: 0 14px 2px;
+    }
+    .row21 {
+      padding: 0 11px 2px;
+      gap: 10px;
+    }
+    .fullbg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(26px) saturate(1.3) brightness(0.6);
+      transform: scale(1.4);
+    }
+    .fullscrim {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        rgba(0, 0, 0, 0.66) 0%,
+        rgba(0, 0, 0, 0.4) 46%,
+        rgba(0, 0, 0, 0.52) 100%
+      );
+    }
+    .fullart {
+      position: relative;
+      flex: none;
+      height: calc(100% - 14px);
+      max-height: 74px;
+      aspect-ratio: 1 / 1;
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.12);
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+      color: rgba(255, 255, 255, 0.7);
+    }
+    .fullart.sm {
+      max-height: 56px;
+      border-radius: 7px;
+      font-size: 14px;
+    }
+    .fullart img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .fulltxt {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+    }
+    .fullhead {
+      position: relative;
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 34%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 1px;
+    }
+    .fullhead .n {
+      font-size: 13.5px;
+      font-weight: 500;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .fullhead .a {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.58);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .fullyric {
+      position: relative;
+      flex: 1 1 auto;
+      min-width: 0;
+      padding-left: 16px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: rgba(255, 255, 255, 0.56);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .fulltt {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      min-width: 0;
+    }
+    .fulltt .n {
+      flex: 0 1 auto;
+      min-width: 0;
+      font-size: 13.5px;
+      font-weight: 500;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .fulltt .a {
+      flex: 0 1 auto;
+      min-width: 0;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.6);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .fullsub {
+      font-size: 11px;
+      line-height: 1.4;
+      color: rgba(255, 255, 255, 0.5);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .fullside {
+      position: relative;
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .fulltime {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.45);
+      font-variant-numeric: tabular-nums;
+      margin-right: 2px;
+      white-space: nowrap;
+    }
+    .fullbar {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 2px;
+      background: rgba(255, 255, 255, 0.16);
+    }
+    .fullbar i {
+      display: block;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.85);
+    }
+    .ctl21 {
+      position: relative;
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    /* 1x1：封面当底，中间一颗播放键 */
+    .s1 {
+      position: relative;
+      border-radius: inherit;
+      padding: 0 6px;
+      box-sizing: border-box;
+    }
+    .s1art {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(18px) brightness(0.55) saturate(1.3);
+      transform: scale(1.25);
+      border-radius: inherit;
+    }
+    .s1pb {
+      position: relative;
+      width: 40px;
+      height: 40px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.32);
+    }
+    .s1 .tt {
+      position: relative;
+      max-width: 100%;
+      padding: 0 4px;
+      color: #fff;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
     }
   `;
 }
