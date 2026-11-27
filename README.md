@@ -1,79 +1,57 @@
 # Sun-Panel 微应用合集
 
-给 [Sun-Panel](https://sunpanel.top) 导航面板写的一些小应用。每个应用都是独立的微应用包，可以单独安装。
+给 [Sun-Panel](https://sunpanel.top) 导航面板写的几个小应用。每个都是独立微应用包，可单独安装。
 
-> ⚠️ **禁止商业使用**，详见 [LICENSE](LICENSE)。
+| | | |
+|---|---|---|
+| ![日历倒计时](calendar/docs/screenshots/01-overview.png) | ![音乐](music/docs/screenshots/01-cards.png) | ![Gately 网关](gately/docs/screenshots/01-cards-dark.png) |
 
-## 应用清单
-
-| 应用 | 说明 | 仓库目录 | 商店 |
+| 应用 | 一句话 | 目录 | 文档 |
 |---|---|---|---|
-| **日历倒计时** | 背景真正透明的日历 / 倒计时卡片，支持农历、二十四节气与自定义纪念日，七种尺寸自适应 | [`calendar/`](calendar/) | Sun-Panel 应用商店搜「日历倒计时」 |
-| **音乐** | 在导航页里播放自建音乐库。卡片即播放器，点开有专辑墙、搜索和同步歌词，兼容 Subsonic 接口 | [`music/`](music/) | Sun-Panel 应用商店搜「音乐」 |
-| **Gately 网关** | 自托管网关 Gately 的看板。卡片看 QPS / 带宽 / 拦截，点开可管站点、证书、封禁 | [`gately/`](gately/) | 手动安装 `chenggegedeid-Gately-x.x.x.zip` |
+| **日历倒计时** | 背景真正透明的日历 / 倒计时卡片，支持农历、节气与纪念日，七种尺寸自适应 | [`calendar/`](calendar/) | [说明](calendar/README.md) · [更新](calendar/CHANGELOG.md) |
+| **音乐** | 卡片即播放器，点开有专辑墙、搜索与同步歌词，兼容 Subsonic 接口 | [`music/`](music/) | [说明](music/README.md) · [更新](music/CHANGELOG.md) |
+| **Gately 网关** | 自托管网关 Gately 的看板，卡片看 QPS / 带宽 / 拦截，支持多台服务器 | [`gately/`](gately/) | [说明](gately/README.md) · [更新](gately/CHANGELOG.md) |
 
-## 日历倒计时
-
-![日历倒计时](calendar/docs/screenshots/01-overview.png)
-
-- 背景完全透明（容器到内容都不画底色，并覆盖宿主卡片背景）
-- 农历、节气、内置节日与自定义纪念日
-- `1x1` `1x2` `2x1` `2x2` `2x4` `4x4` `1xfull` 七种尺寸
-
-完整说明见 [calendar/README.md](calendar/README.md)。
-
-## 音乐
-
-![音乐卡片](music/docs/screenshots/01-cards.png)
-
-- 卡片自带播放控制：播放/暂停、上下曲、进度条
-- 音频是模块级单例，关掉播放窗口音乐不断
-- 专辑墙、搜索、同步歌词（逐行高亮、点击跳转）
-- 兼容 Navidrome / Gonic / Airsonic / Jellyfin（Subsonic 接口）
-
-完整说明见 [music/README.md](music/README.md)，附一个批量补歌词的脚本 [music/tools/fetch-lyrics.py](music/tools/fetch-lyrics.py)。
-
-## Gately 网关
-
-![Gately 卡片](gately/docs/screenshots/01-cards-dark.png)
-
-- 卡片七种尺寸逐个排版：QPS、实时带宽、处理中、站点、封禁、CPU 内存都能上卡
-- 趋势曲线从 0 起算，透明 / 毛玻璃 / 纯色三种底色，深浅色自动适配
-- 主窗口五个标签：概览、站点、证书、封禁、日志
-- 能直接改配置：启停站点、封禁或解封 IP、续期证书
-- 令牌权限按读 / 写分层，只读令牌也能完整看监控
-
-需要 [Gately](https://github.com/wangwanjie/gately) 后台建的 API 令牌。完整说明见 [gately/README.md](gately/README.md)。
+当前版本：日历倒计时 `2.0.0` · 音乐 `3.0.3` · Gately 网关 `1.3.0`
 
 ## 目录结构
 
 ```
 .
-├─ calendar/             # 日历倒计时（独立微应用工程）
-│  ├─ config/            #   应用信息与组件注册
-│  ├─ src/               #   组件源码
-│  ├─ docs/screenshots/  #   商店截图
-│  └─ package.json       #   npm run dev / pack
-├─ music/                # 音乐（独立微应用工程，结构同上）
-├─ gately/               # Gately 网关（独立微应用工程，结构同上，另带本地模拟器）
-└─ LICENSE               # 统一许可证：禁止商业使用
+├─ calendar/            日历倒计时（独立工程）
+├─ music/               音乐（独立工程）
+├─ gately/              Gately 网关（独立工程，另带本地模拟器）
+├─ docs/                仓库级文档
+│  ├─ 开发指南.md
+│  ├─ 发布与上架.md
+│  ├─ 提交规范.md
+│  ├─ SECURITY.md                安全说明（回应静态扫描）
+│  └─ UPGRADE_APP_JSON_VERSION.md
+└─ LICENSE              统一许可证：禁止商业使用
 ```
 
-三个应用互不依赖，各自 `npm install && npm run dev` 即可开发。
+三个工程结构一致、互不依赖，各自 `npm install && npm run dev` 即可开发。
 
-## 开发一个应用
+## 快速开始
 
 ```bash
-cd music           # 或 calendar / gately
+cd gately              # 或 calendar / music
 npm install
-npm run dev        # 开发服务器，带热更新
-npm run pack       # 打包生产版到 packages/
+npm run dev            # 开发服务器，热更新
+npm run pack           # 打包到 packages/
 ```
 
-开发时可以把开发服务器的「入口 JS 地址」直接导入 Sun-Panel 预览，不必每次打包上传。细节见各应用 README 的「开发调试」一节。
+开发时可以把开发服务器的「入口 JS 地址」直接导入 Sun-Panel 预览，不必每次打包上传。细节见 [开发指南](docs/开发指南.md)。
+
+## 文档
+
+- [开发指南](docs/开发指南.md) — 脚手架、构建链路、预览页、模板同步、新增应用
+- [发布与上架](docs/发布与上架.md) — 版本号、打包自检、截图规范、审核要点
+- [提交规范](docs/提交规范.md) — 提交粒度与格式
+- [安全说明](docs/SECURITY.md) — 静态扫描提示的来源与风险判断
 
 ## 许可证
 
-**禁止商业使用。** 个人可免费使用、修改；分发需保留署名与许可证；修改后须标注「已修改」并同样禁止商用；商用需书面授权。
+**禁止商业使用。** 个人可免费使用、免费修改；分发需保留署名与本许可证；修改后须标注「已修改」并同样禁止商用；商用需书面授权。
 
-完整条款见 [LICENSE](LICENSE)。联系：[GitHub @chenggegedeid](https://github.com/chenggegedeid)
+源码公开是为了让人能核对网络行为，不构成 OSI 定义的开源许可。完整条款见 [LICENSE](LICENSE)。联系：[GitHub @chenggegedeid](https://github.com/chenggegedeid)
