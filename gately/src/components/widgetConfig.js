@@ -218,6 +218,17 @@ export class GatelyConfig extends SunPanelPageElement {
 
   // ---------- 保存 ----------
   async _save() {
+    // 填了名字或令牌却没填地址的行，别静默丢掉
+    const noHost = this.servers.find(
+      (s) => !normalizeHost(s.host) && (String(s.name || '').trim() || String(s.token || '').trim()),
+    );
+    if (noHost) {
+      this._say(
+        `「${String(noHost.name || '').trim() || '有一台'}」还没填管理地址，比如 http://192.168.1.10:16680`,
+        'err',
+      );
+      return;
+    }
     const list = normalizeServers(
       this.servers.map((s) => ({
         ...s,

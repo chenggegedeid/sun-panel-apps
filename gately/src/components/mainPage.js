@@ -129,7 +129,7 @@ export class GatelyMain extends SunPanelPageElement {
 
     this.ready = true;
     if (this.store?.configured) {
-      this._loadAll();
+      // 页面数据由 _bind 里那一站式拉取负责，这里只挂趋势的定时刷新
       // 趋势是分钟粒度的，60 秒补一次就够；页面在后台时跳过
       const timer = this.spCtx?.api?.timer || window;
       const set = timer.setInterval || window.setInterval.bind(window);
@@ -162,17 +162,40 @@ export class GatelyMain extends SunPanelPageElement {
 
   /** 设置页保存后重读清单 */
   async _reloadConfig() {
+    // 记下当前这台是谁：地址或令牌换了，旧机器的证书/封禁/日志都得作废
+    const before = this.store ? `${this.store.server.host}|${this.store.server.token}` : '';
     try {
       const dn = this.spCtx?.api?.dataNode?.user;
       const conf = await readConfig(dn);
       gateway.sync(conf.servers, { interval: conf.settings?.refresh, defaultId: conf.defaultId });
       this.servers = gateway.list();
       this._attachAll();
+
+      // 清单里已经删掉的那些台，缓存跟着清掉
+      const alive = new Set(this.servers.map((s) => s.id));
+      Object.keys(this._caches).forEach((id) => {
+        if (!alive.has(id)) delete this._caches[id];
+      });
+
       if (!this.servers.some((s) => s.id === this.currentId)) {
         this._bind(this.servers[0]?.id);
-      } else {
-        this.requestUpdate();
+        return;
       }
+      const after = this.store ? `${this.store.server.host}|${this.store.server.token}` : '';
+      if (this.store && before && after !== before) {
+        // 还是同一张卡片、同一个 id，但背后换了一台机器：页面数据全部作废重拉
+        delete this._caches[this.currentId];
+        this.certs = null;
+        this.bans = null;
+        this.ddns = null;
+        this.logs = null;
+        this.procs = null;
+        this.trend = null;
+        this.trendErr = '';
+        this.errs = {};
+        this._loadAll();
+      }
+      this.requestUpdate();
     } catch {
       /* 读失败就维持现状 */
     }
@@ -289,7 +312,9 @@ export class GatelyMain extends SunPanelPageElement {
         }
       }),
     );
-    // 趋势要靠拓扑里的站点列表定位 listener+site，所以等拓扑落定再取    await store.refresh();
+    // 趋势要靠拓扑里的站点列表定位 listener+site，所以等拓扑落定再取
+    await store.refresh();
+    if (this.store !== store) return; // 中途切走了，别把这一台的趋势写到另一台头上
     this._loadTrend();
     this._saveCache();
   }
@@ -856,7 +881,7 @@ export class GatelyMain extends SunPanelPageElement {
           ${logo(30)}
           <div class="hmeta">
             <div class="hname">
-              ${name}
+              <span class="hn">${name}</span>
               ${s.version ? html`<span class="ver">${s.version}</span>` : ''}
             </div>
             <div class="hsub">
@@ -1008,9 +1033,12 @@ export class GatelyMain extends SunPanelPageElement {
       display: flex;
       align-items: center;
       gap: 10px;
+      /* 基础宽度给 0：名字再长也先占剩余空间，不会把右侧按钮挤到下一行 */
+      flex: 1 1 0;
       min-width: 0;
     }
     .hmeta {
+      flex: 1 1 auto;
       min-width: 0;
     }
     .hname {
@@ -1019,11 +1047,17 @@ export class GatelyMain extends SunPanelPageElement {
       display: flex;
       align-items: center;
       gap: 8px;
-      white-space: nowrap;
+      min-width: 0;
+    }
+    /* 名字可能很长（「公司机房第二台网关」），超出就省略，别把版本号挤出去 */
+    .hname .hn {
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .ver {
+      flex: none;
       font-size: 10.5px;
       font-weight: 500;
       padding: 1px 6px;
@@ -1037,6 +1071,8 @@ export class GatelyMain extends SunPanelPageElement {
       display: flex;
       gap: 6px;
       margin-top: 2px;
+      min-width: 0;
+      overflow: hidden;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;

@@ -291,7 +291,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
   _empty() {
     return html`
       <div class="empty" @click=${() => this._openConfig()}>
-        <span class="etitle">Gately 网关</span>
+        <span class="etitle">${this.serverName || 'Gately 网关'}</span>
         <span class="ehint">点这里填管理地址与 API 令牌</span>
       </div>
     `;
@@ -302,6 +302,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
     const full = String(this.snap.error || '连接失败');
     const brief = BRIEF[this.snap.errorKind] || full.split(/[。；]/)[0].slice(0, 14) || '连接失败';
     return html`<div class="errbar" title=${full} @click=${() => this._openConfig()}>
+      ${this.serverName ? html`<span class="ename">${this.serverName}</span>` : nothing}
       <b>${brief}</b>
       <em>点这里改配置</em>
     </div>`;
@@ -899,6 +900,14 @@ export class GatelyWidget extends SunPanelWidgetElement {
     .errbar b {
       font-weight: 600;
       font-size: 11px;
+    }
+    .errbar .ename {
+      max-width: 100%;
+      font-size: 9.5px;
+      color: var(--soft);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .errbar em {
       font-style: normal;

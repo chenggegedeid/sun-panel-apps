@@ -95,6 +95,7 @@ export function fmtDateTime(ts) {
 /** 剩余天数（证书等），可为负 */
 export function daysLeft(v) {
   // 既支持 ISO 字符串（接口常见），也支持毫秒时间戳（从 PEM 解析出来的）
+  if (!v) return null; // 0 / '' / null 都算「没读到」，别算成几十万天前
   const t = typeof v === 'number' ? v : Date.parse(v);
   if (!Number.isFinite(t)) return null;
   return (t - Date.now()) / 86400000;
