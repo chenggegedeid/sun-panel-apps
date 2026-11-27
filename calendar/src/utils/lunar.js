@@ -34,6 +34,10 @@ const DAY_NAMES = [
   '廿一', '廿二', '廿三', '廿四', '廿五', '廿六', '廿七', '廿八', '廿九', '三十',
 ];
 
+/** 农历月份 / 日期选项（供界面下拉使用） */
+export const LUNAR_MONTH_LABELS = MONTH_NAMES.map((n) => `${n}月`);
+export const LUNAR_DAY_LABELS = DAY_NAMES;
+
 const TERM_NAMES = [
   '小寒', '大寒', '立春', '雨水', '惊蛰', '春分', '清明', '谷雨',
   '立夏', '小满', '芒种', '夏至', '小暑', '大暑', '立秋', '处暑',

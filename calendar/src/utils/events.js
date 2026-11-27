@@ -37,6 +37,14 @@ export function daysUntil(target, today = startOfToday()) {
  * 计算事件下一次发生的日期
  */
 export function nextOccurrence(event, today = startOfToday()) {
+  // 农历事件：按农历月日反推公历，天然「每年重复」
+  if (event.calendar === 'lunar') {
+    const lm = Number(event.lMonth);
+    const ld = Number(event.lDay);
+    if (!lm || !ld) return parseDate(event.date);
+    return nextLunarOccurrence(lm, ld, today);
+  }
+
   const date = parseDate(event.date);
   if (!date) return null;
   if (!event.yearly) return date;
@@ -46,6 +54,28 @@ export function nextOccurrence(event, today = startOfToday()) {
     target.setFullYear(target.getFullYear() + 1);
   }
   return target;
+}
+
+/**
+ * 农历某月某日的下一次公历日期
+ *
+ * 用「公历→农历」回推校验，可以自动处理两种情况：
+ *   1. 小月没有三十 —— 该年跳过，顺延到下一个有的年份
+ *   2. 闰月错位 —— 只在正闰月匹配，不误判
+ */
+export function nextLunarOccurrence(lMonth, lDay, today = startOfToday()) {
+  const tl = solarToLunar(today.getFullYear(), today.getMonth() + 1, today.getDate());
+  for (let i = 0; i <= 2; i++) {
+    const s = lunarToSolar(tl.lYear + i, lMonth, lDay, false);
+    if (!s) continue;
+    const d = new Date(s.year, s.month - 1, s.day);
+    const back = solarToLunar(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    if (back.isLeap || back.lMonth !== lMonth || back.lDay !== lDay) continue;
+    if (daysUntil(d, today) >= 0) return d;
+  }
+  // 兜底：再往后找 1 年，避免极端情况（如三十的小月连缺）
+  const s = lunarToSolar(tl.lYear + 3, lMonth, lDay, false);
+  return s ? new Date(s.year, s.month - 1, s.day) : null;
 }
 
 /** 农历节日在某一年的公历日期 */
@@ -103,6 +133,9 @@ export function buildTimeline({ events = [], includeFestivals = true, today = st
       date: next,
       days: daysUntil(next, today),
       yearly: !!e.yearly,
+      calendar: e.calendar === 'lunar' ? 'lunar' : 'solar',
+      lMonth: e.lMonth,
+      lDay: e.lDay,
       isFestival: false,
     });
   }
@@ -133,11 +166,13 @@ export function buildTimeline({ events = [], includeFestivals = true, today = st
     .sort((a, b) => a.days - b.days || a.title.localeCompare(b.title, 'zh'));
 }
 
-/** 日期副标题：2027-05-02 · 农历四月初六 */
-export function dateCaption(date) {
+/** 日期副标题：2027-05-02 · 农历四月初六（农历事件额外标注） */
+export function dateCaption(date, event = null) {
   if (!date) return '';
   const l = solarToLunar(date.getFullYear(), date.getMonth() + 1, date.getDate());
-  return `${formatDate(date)} · 农历${l.monthName}${l.dayName}`;
+  const lunarText = `农历${l.monthName}${l.dayName}`;
+  if (event?.calendar === 'lunar') return `${lunarText} · ${formatDate(date)}`;
+  return `${formatDate(date)} · ${lunarText}`;
 }
 
 /** 天数胶囊文案 */

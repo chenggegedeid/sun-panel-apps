@@ -185,8 +185,9 @@ export class Widget extends SunPanelWidgetElement {
         <div class="row-main">
           <span class="row-title">${item.title}</span>
           <span class="row-sub">
-            ${item.date.getMonth() + 1}月${item.date.getDate()}日
-            ${this.cfg.showLunar ? ` · 农历${lunar.text}` : ''}
+            ${item.calendar === 'lunar'
+    ? `农历${lunar.text} · ${item.date.getMonth() + 1}月${item.date.getDate()}日`
+    : `${item.date.getMonth() + 1}月${item.date.getDate()}日${this.cfg.showLunar ? ` · 农历${lunar.text}` : ''}`}
           </span>
         </div>
         <span class="row-days">${item.days === 0 ? '今天' : html`${item.days}<i>天</i>`}</span>

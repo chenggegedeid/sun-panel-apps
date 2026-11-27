@@ -1,7 +1,8 @@
 import { SunPanelPageElement } from '@sun-panel/micro-app';
 import { html, css } from 'lit';
 import { DEFAULT_CONFIG, resolveConfig, hexToRgba } from '../utils/theme.js';
-import { EVENT_TYPES, formatDate, nextOccurrence, daysUntil } from '../utils/events.js';
+import { EVENT_TYPES, formatDate, parseDate, nextOccurrence, daysUntil } from '../utils/events.js';
+import { solarToLunar, LUNAR_MONTH_LABELS, LUNAR_DAY_LABELS } from '../utils/lunar.js';
 
 const BG_MODES = [
   { value: 'transparent', label: '完全透明', desc: '不画底色，直接透出壁纸 / 卡片背景' },
@@ -92,6 +93,16 @@ export class WidgetConfig extends SunPanelPageElement {
     return `e${Date.now().toString(36)}${Math.floor(Math.random() * 999).toString(36)}`;
   }
 
+  _setCalendar(e, cal) {
+    if (cal === 'lunar') {
+      const d = parseDate(e.date) || new Date();
+      const l = solarToLunar(d.getFullYear(), d.getMonth() + 1, d.getDate());
+      this._updateEvent(e.id, { calendar: 'lunar', lMonth: l.lMonth, lDay: l.lDay, yearly: true });
+    } else {
+      this._updateEvent(e.id, { calendar: 'solar' });
+    }
+  }
+
   _addEvent(type = 'birthday') {
     this.events = [
       ...this.events,
@@ -100,6 +111,7 @@ export class WidgetConfig extends SunPanelPageElement {
         title: type === 'birthday' ? '我的生日' : type === 'anniversary' ? '纪念日' : '重要日子',
         date: formatDate(new Date()),
         type,
+        calendar: 'solar',
         yearly: true,
         emoji: EVENT_TYPES[type]?.emoji || '📌',
       },
@@ -120,14 +132,22 @@ export class WidgetConfig extends SunPanelPageElement {
       // 事件写入数据节点（用户级，跨卡片共享）
       const clean = this.events
         .filter((e) => e.title && e.date)
-        .map((e) => ({
-          id: e.id,
-          title: e.title.trim(),
-          date: e.date,
-          type: e.type || 'reminder',
-          yearly: !!e.yearly,
-          emoji: e.emoji || EVENT_TYPES[e.type]?.emoji || '📌',
-        }));
+        .map((e) => {
+          const lunar = e.calendar === 'lunar';
+          // 农历事件把 date 同步成「下一次的公历日期」，方便旧版本和列表排序
+          const occ = nextOccurrence({ ...e, yearly: lunar ? true : !!e.yearly });
+          return {
+            id: e.id,
+            title: e.title.trim(),
+            date: lunar && occ ? formatDate(occ) : e.date,
+            type: e.type || 'reminder',
+            yearly: lunar ? true : !!e.yearly,
+            calendar: lunar ? 'lunar' : 'solar',
+            lMonth: lunar ? Number(e.lMonth) : undefined,
+            lDay: lunar ? Number(e.lDay) : undefined,
+            emoji: e.emoji || EVENT_TYPES[e.type]?.emoji || '📌',
+          };
+        });
       await this.spCtx?.api?.dataNode?.user?.setByKey('events', 'list', clean);
 
       // 卡片配置 + 关键一步：把宿主卡片背景也设为透明
@@ -243,12 +263,49 @@ export class WidgetConfig extends SunPanelPageElement {
                         <button class="del" title="删除" @click=${() => this._removeEvent(e.id)}>×</button>
                       </div>
                       <div class="item-row">
-                        <input
-                          class="date"
-                          type="date"
-                          .value=${e.date}
-                          @change=${(ev) => this._updateEvent(e.id, { date: ev.target.value })}
-                        />
+                        <div class="cal-switch">
+                          <button
+                            class=${e.calendar === 'lunar' ? '' : 'on'}
+                            @click=${() => this._setCalendar(e, 'solar')}
+                          >
+                            公历
+                          </button>
+                          <button
+                            class=${e.calendar === 'lunar' ? 'on' : ''}
+                            @click=${() => this._setCalendar(e, 'lunar')}
+                          >
+                            农历
+                          </button>
+                        </div>
+                        ${e.calendar === 'lunar'
+    ? html`<select
+                                class="lun"
+                                .value=${String(e.lMonth || 1)}
+                                @change=${(ev) => this._updateEvent(e.id, { lMonth: Number(ev.target.value) })}
+                              >
+                                ${LUNAR_MONTH_LABELS.map(
+    (n, i) => html`<option value=${i + 1} ?selected=${Number(e.lMonth) === i + 1}>
+                                    ${n}
+                                  </option>`,
+  )}
+                              </select>
+                              <select
+                                class="lun"
+                                .value=${String(e.lDay || 1)}
+                                @change=${(ev) => this._updateEvent(e.id, { lDay: Number(ev.target.value) })}
+                              >
+                                ${LUNAR_DAY_LABELS.map(
+    (n, i) => html`<option value=${i + 1} ?selected=${Number(e.lDay) === i + 1}>
+                                    ${n}
+                                  </option>`,
+  )}
+                              </select>`
+    : html`<input
+                              class="date"
+                              type="date"
+                              .value=${e.date}
+                              @change=${(ev) => this._updateEvent(e.id, { date: ev.target.value })}
+                            />`}
                         <select
                           class="type"
                           .value=${e.type || 'reminder'}
@@ -260,15 +317,17 @@ export class WidgetConfig extends SunPanelPageElement {
                             </option>`,
   )}
                         </select>
-                        <label class="yearly">
-                          <input
-                            type="checkbox"
-                            .checked=${!!e.yearly}
-                            @change=${(ev) => this._updateEvent(e.id, { yearly: ev.target.checked })}
-                          />
-                          每年重复
-                        </label>
-                        ${e.yearly && this._eventPreview(e) != null
+                        ${e.calendar === 'lunar'
+    ? html`<span class="yearly lun-note">每年</span>`
+    : html`<label class="yearly">
+                              <input
+                                type="checkbox"
+                                .checked=${!!e.yearly}
+                                @change=${(ev) => this._updateEvent(e.id, { yearly: ev.target.checked })}
+                              />
+                              每年重复
+                            </label>`}
+                        ${this._eventPreview(e) != null
     ? html`<span class="left-days">${this._eventPreview(e)} 天后</span>`
     : ''}
                       </div>
@@ -539,7 +598,8 @@ export class WidgetConfig extends SunPanelPageElement {
       border-bottom-color: rgba(14, 165, 233, 0.6);
     }
     input.date,
-    select.type {
+    select.type,
+    select.lun {
       font-size: 12px;
       padding: 4px 6px;
       border-radius: 6px;
@@ -547,6 +607,38 @@ export class WidgetConfig extends SunPanelPageElement {
       background: #fff;
       color: inherit;
       outline: none;
+    }
+    select.lun {
+      min-width: 62px;
+    }
+    .cal-switch {
+      display: inline-flex;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 7px;
+      overflow: hidden;
+      flex: none;
+    }
+    .cal-switch button {
+      font-size: 11.5px;
+      padding: 4px 9px;
+      border: none;
+      background: transparent;
+      color: rgba(0, 0, 0, 0.55);
+      cursor: pointer;
+      line-height: 1.4;
+    }
+    .cal-switch button + button {
+      border-left: 1px solid rgba(0, 0, 0, 0.1);
+    }
+    .cal-switch button.on {
+      background: rgba(14, 165, 233, 0.14);
+      color: #0369a1;
+      font-weight: 600;
+    }
+    .lun-note {
+      font-size: 11.5px;
+      color: rgba(0, 0, 0, 0.4);
+      flex: none;
     }
     .yearly {
       display: inline-flex;
@@ -763,8 +855,25 @@ export class WidgetConfig extends SunPanelPageElement {
     .dark input.title {
       color: #e8eaf0;
     }
+    .dark .cal-switch {
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+    .dark .cal-switch button {
+      color: rgba(255, 255, 255, 0.6);
+    }
+    .dark .cal-switch button + button {
+      border-left-color: rgba(255, 255, 255, 0.1);
+    }
+    .dark .cal-switch button.on {
+      background: rgba(14, 165, 233, 0.24);
+      color: #bae6fd;
+    }
+    .dark .lun-note {
+      color: rgba(255, 255, 255, 0.45);
+    }
     .dark input.date,
-    .dark select.type {
+    .dark select.type,
+    .dark select.lun {
       background: rgba(0, 0, 0, 0.28);
       border-color: rgba(255, 255, 255, 0.12);
       color: #e8eaf0;

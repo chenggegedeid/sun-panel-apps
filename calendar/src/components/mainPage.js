@@ -144,7 +144,9 @@ export class MainPage extends SunPanelPageElement {
                     <span class="emoji">${i.emoji}</span>
                     <div class="meta">
                       <span class="t">${i.title}</span>
-                      <span class="s">${i.date.getMonth() + 1}月${i.date.getDate()}日${i.isFestival ? ' · 节日' : ''}</span>
+                      <span class="s">${i.calendar === 'lunar'
+    ? `农历${solarToLunar(i.date.getFullYear(), i.date.getMonth() + 1, i.date.getDate()).text} · ${i.date.getMonth() + 1}月${i.date.getDate()}日`
+    : `${i.date.getMonth() + 1}月${i.date.getDate()}日`}${i.isFestival ? ' · 节日' : ''}</span>
                     </div>
                     <span class="days">${i.days === 0 ? '今天' : html`${i.days}<i>天</i>`}</span>
                   </div>`,
