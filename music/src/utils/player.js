@@ -18,6 +18,8 @@ class Player {
     this.loading = false;
     this.error = '';
     this._lastEmit = 0;
+    this.mode = 'order';   // order | single | shuffle
+    this.volume = 0.8;
   }
 
   get cur() {
@@ -67,6 +69,8 @@ class Player {
       queue: this.queue,
       index: this.index,
       server: this.server,
+      mode: this.mode,
+      volume: this.volume,
     };
   }
 
@@ -78,7 +82,14 @@ class Player {
     a.addEventListener('durationchange', () => this._emit(true));
     a.addEventListener('play', () => this._emit(true));
     a.addEventListener('pause', () => this._emit(true));
-    a.addEventListener('ended', () => this.next());
+    a.addEventListener('ended', () => {
+      if (this.mode === 'single') {
+        a.currentTime = 0;
+        a.play().catch(() => {});
+        return;
+      }
+      this.next();
+    });
     a.addEventListener('error', () => {
       if (a.src) this.error = '这首歌播不了，可能是格式或权限问题';
       this._emit(true);
@@ -147,7 +158,9 @@ class Player {
     if (!song || !this.server) return;
     this.error = '';
     const a = this._audioEl();
+    a.volume = this.volume;
     a.src = streamUrl(this.server, song.id);
+    this._syncMediaSession();
     a.play()
       .then(() => this._emit(true))
       .catch(() => {
@@ -168,8 +181,47 @@ class Player {
 
   next() {
     if (!this.queue.length) return;
-    this.index = (this.index + 1) % this.queue.length;
+    if (this.mode === 'shuffle' && this.queue.length > 1) {
+      let n = this.index;
+      while (n === this.index) n = Math.floor(Math.random() * this.queue.length);
+      this.index = n;
+    } else {
+      this.index = (this.index + 1) % this.queue.length;
+    }
     this._start();
+  }
+
+  /** 顺序 → 单曲 → 随机 循环切换 */
+  cycleMode() {
+    const order = ['order', 'single', 'shuffle'];
+    this.mode = order[(order.indexOf(this.mode) + 1) % order.length];
+    this._emit(true);
+    return this.mode;
+  }
+
+  setVolume(v) {
+    this.volume = Math.min(1, Math.max(0, Number(v) || 0));
+    if (this._audio) this._audio.volume = this.volume;
+    this._emit(true);
+  }
+
+  /** 系统媒体键 / 锁屏控制 */
+  _syncMediaSession() {
+    const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : null;
+    if (!ms || !this.cur) return;
+    try {
+      ms.metadata = new MediaMetadata({
+        title: this.cur.title || '',
+        artist: this.cur.artist || '',
+        album: this.cur.album || '',
+      });
+      ms.setActionHandler('play', () => this.toggle());
+      ms.setActionHandler('pause', () => this.toggle());
+      ms.setActionHandler('previoustrack', () => this.prev());
+      ms.setActionHandler('nexttrack', () => this.next());
+    } catch {
+      /* 浏览器不支持就忽略 */
+    }
   }
 
   prev() {

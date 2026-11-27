@@ -96,6 +96,20 @@ export class MusicMain extends SunPanelPageElement {
       this.servers = [];
     }
     this.loading = false;
+    // 读回播放模式与音量
+    try {
+      const [m, v] = await Promise.all([
+        this.spCtx?.api?.dataNode?.user?.getByKey('music', 'mode'),
+        this.spCtx?.api?.dataNode?.user?.getByKey('music', 'volume'),
+      ]);
+      if (m === 'order' || m === 'single' || m === 'shuffle') player.mode = m;
+      if (typeof v === 'number') player.setVolume(v);
+    } catch {
+      /* 没存过就用默认值 */
+    }
+    this._keyHandler = (e) => this._onKey(e);
+    window.addEventListener('keydown', this._keyHandler);
+
     if (this.server) {
       player.setServer(this.server);
       this._syncPlayer();
@@ -200,6 +214,43 @@ export class MusicMain extends SunPanelPageElement {
     // 只退订，不要停音频——关窗口不该断音
     this._unsub?.();
     this._unsub = null;
+    if (this._keyHandler) window.removeEventListener('keydown', this._keyHandler);
+    this._keyHandler = null;
+  }
+
+  _onKey(e) {
+    const tag = e.target?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      this._toggle();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (e.shiftKey) player.seek(Math.min(player.duration || 0, player.progress + 10));
+      else this._next();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (e.shiftKey) player.seek(Math.max(0, player.progress - 10));
+      else this._prev();
+    } else if (e.key.toLowerCase() === 'l') {
+      this._toggleLyrics();
+    }
+  }
+
+  _cycleMode() {
+    const m = player.cycleMode();
+    this.spCtx?.api?.dataNode?.user?.setByKey('music', 'mode', m).catch(() => {});
+  }
+
+  _setVolume(e) {
+    const v = Number(e.target.value) / 100;
+    player.setVolume(v);
+    this.spCtx?.api?.dataNode?.user?.setByKey('music', 'volume', v).catch(() => {});
+  }
+
+  _modeLabel() {
+    return { order: '顺', single: '单', shuffle: '随' }[this.ps?.mode || 'order'] || '顺';
   }
 
   _fail(e) {
@@ -497,8 +548,15 @@ export class MusicMain extends SunPanelPageElement {
         </div>
         <div class="p-ctrls">
           <button
+            class="ic mode"
+            title="播放模式：顺序 / 单曲 / 随机（快捷键 L 显示歌词）"
+            @click=${() => this._cycleMode()}
+          >
+            ${this._modeLabel()}
+          </button>
+          <button
             class="ic lyric ${this.showLyrics ? 'on' : ''}"
-            title="歌词"
+            title="歌词（L）"
             @click=${() => this._toggleLyrics()}
             ?disabled=${!this.cur}
           >
@@ -509,6 +567,15 @@ export class MusicMain extends SunPanelPageElement {
             ${this.playing ? '⏸' : '▶'}
           </button>
           <button class="ic" title="下一首" @click=${() => this._next()} ?disabled=${!this.queue.length}>⏭</button>
+          <input
+            class="vol"
+            type="range"
+            min="0"
+            max="100"
+            .value=${String(Math.round((this.ps?.volume ?? 0.8) * 100))}
+            title="音量"
+            @input=${(e) => this._setVolume(e)}
+          />
         </div>
       </div>
     `;
@@ -1071,6 +1138,45 @@ export class MusicMain extends SunPanelPageElement {
     .seek:disabled {
       cursor: default;
       opacity: 0.4;
+    }
+    .vol {
+      width: 68px;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 14px;
+      background: transparent;
+      cursor: pointer;
+      margin-left: 2px;
+    }
+    .vol::-webkit-slider-runnable-track {
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.2);
+    }
+    .vol::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 9px;
+      height: 9px;
+      margin-top: -3px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.85);
+    }
+    .vol::-moz-range-track {
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.2);
+    }
+    .vol::-moz-range-thumb {
+      width: 9px;
+      height: 9px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.85);
+    }
+    .ic.mode {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: rgba(232, 234, 240, 0.62);
     }
     .p-ctrls {
       display: flex;
