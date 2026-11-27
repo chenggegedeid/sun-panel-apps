@@ -17,6 +17,7 @@ export class MusicWidget extends SunPanelWidgetElement {
 
   constructor() {
     super();
+    this._badCovers = new Set();
     this.servers = [];
     this.settings = null;
     this.activeId = '';
@@ -127,8 +128,18 @@ export class MusicWidget extends SunPanelWidgetElement {
   _cover(size) {
     const s = this.server;
     const song = this.ps.cur;
-    if (s && song?.coverArt) {
-      return html`<img class="cov" style="width:${size}px;height:${size}px" src=${coverUrl(s, song.coverArt, size * 2)} alt="" />`;
+    const bad = song?.coverArt && this._badCovers?.has(song.coverArt);
+    if (s && song?.coverArt && !bad) {
+      return html`<img
+        class="cov"
+        style="width:${size}px;height:${size}px"
+        src=${coverUrl(s, song.coverArt, size * 2)}
+        alt=""
+        @error=${() => {
+    this._badCovers.add(song.coverArt);
+    this.requestUpdate();
+  }}
+      />`;
     }
     return html`<div class="cov ph" style="width:${size}px;height:${size}px">♪</div>`;
   }

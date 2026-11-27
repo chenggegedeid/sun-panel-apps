@@ -69,6 +69,7 @@ export class MusicMain extends SunPanelPageElement {
     this._lyricHoldUntil = 0;
     this.dragging = false;
     this.dragValue = null;
+    this._badCovers = new Set();
   }
 
   _shownProgress() {
@@ -132,6 +133,18 @@ export class MusicMain extends SunPanelPageElement {
       this.queue = snap.queue;
       this.qIndex = snap.index;
       if (snap.error) this.error = snap.error;
+      // 只有进度在变时限流重渲染，避免整页每 240ms 重绘一次
+      const sig = `${snap.cur?.id}|${snap.playing}|${snap.loading}|${snap.error}|${snap.queue.length}|${snap.index}|${snap.mode}`;
+      if (sig === this._sig) {
+        const now = Date.now();
+        if (now - (this._lastPaint || 0) < 800) {
+          this._pendingPaint = snap;
+          return;
+        }
+        this._lastPaint = now;
+      }
+      this._sig = sig;
+
       if (snap.cur?.id !== prevId) {
         this.dragging = false;
         this.dragValue = null;
@@ -356,8 +369,19 @@ export class MusicMain extends SunPanelPageElement {
   }
 
   _cover(coverArt, size = 300) {
-    const u = coverUrl(this.server, coverArt, size);
-    return u ? html`<img class="cover" src=${u} alt="" loading="lazy" />` : html`<div class="cover ph">♪</div>`;
+    // 服务器没有这张封面时回退到占位符，避免显示浏览器的“破图”
+    const u = coverArt && !this._badCovers.has(coverArt) ? coverUrl(this.server, coverArt, size) : '';
+    if (!u) return html`<div class="cover ph">♪</div>`;
+    return html`<img
+      class="cover"
+      src=${u}
+      alt=""
+      loading="lazy"
+      @error=${() => {
+    this._badCovers.add(coverArt);
+    this.requestUpdate();
+  }}
+    />`;
   }
 
   // ---------- 各部分 ----------

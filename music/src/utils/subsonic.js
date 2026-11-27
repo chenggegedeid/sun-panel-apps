@@ -263,12 +263,30 @@ export function streamUrl(server, songId, maxBitRate = 0) {
   return `${normalizeBase(server.url)}/rest/stream.view?${p.toString()}`;
 }
 
+// 封面地址缓存
+// baseParams 每次都生成新的随机 salt，如果不缓存，界面每帧重渲染都会得到新 URL，
+// 浏览器就会不停重新下载图片 —— 表现就是封面一直闪、偶尔出现破图。
+const coverUrlCache = new Map();
+
 export function coverUrl(server, coverArtId, size = 300) {
   if (!coverArtId) return '';
+  const key = `${server?.url || ''}|${coverArtId}|${size}`;
+  const hit = coverUrlCache.get(key);
+  if (hit) return hit;
+
   const p = baseParams(server);
   p.set('id', coverArtId);
   p.set('size', String(size));
-  return `${normalizeBase(server.url)}/rest/getCoverArt.view?${p.toString()}`;
+  const url = `${normalizeBase(server.url)}/rest/getCoverArt.view?${p.toString()}`;
+
+  if (coverUrlCache.size > 400) coverUrlCache.clear();
+  coverUrlCache.set(key, url);
+  return url;
+}
+
+/** 切换服务器后清掉旧地址（salt 与账号绑定） */
+export function clearCoverCache() {
+  coverUrlCache.clear();
 }
 
 export function normalizeServers(list) {
