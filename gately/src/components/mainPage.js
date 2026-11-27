@@ -459,22 +459,58 @@ export class GatelyMain extends SunPanelPageElement {
   }
 
   // ---------- 概览 ----------
+  /**
+   * 体检条：一行说完这台现在有没有事。
+   * 有异常时列前三条，点一下直接跳到对应标签页；全正常时说清「多少站点、证书还剩多久」。
+   */
+  _healthBar() {
+    const s = this.snap;
+    const alerts = Array.isArray(s.alerts) ? s.alerts : [];
+    const g = s.gateway;
+
+    if (!alerts.length) {
+      const bits = [];
+      if (g) bits.push(`${g.sites.filter((x) => x.enable).length} 个站点在用`);
+      if (s.guard) bits.push(`封禁 ${fmtNum(s.guard.bans)} 条`);
+      const ci = this.store?.certInfo;
+      if (ci && ci.days != null) {
+        bits.push(ci.days < 0 ? '证书已过期' : `证书最近 ${Math.round(ci.days)} 天`);
+      }
+      return html`<div class="health ok">
+        <i></i><b>全部正常</b><span>${bits.join(' · ') || '连接正常'}</span>
+      </div>`;
+    }
+
+    const err = alerts.some((a) => a.level === 'err');
+    return html`<div class="health ${err ? 'err' : 'warn'}">
+      <i></i><b>${alerts.length} 个问题</b>
+      <div class="hlist">
+        ${alerts.slice(0, 3).map(
+    (a) => html`<a @click=${() => (this.tab = a.tab || 'overview')}>${a.text}</a>`,
+  )}
+      </div>
+    </div>`;
+  }
+
   _overview() {
     const s = this.snap;
     const g = s.gateway;
     const sites = g?.sites || [];
     const enabled = sites.filter((x) => x.enable).length;
-    const unhealthy = sites.filter((x) => x.upstreams.some((u) => !u.healthy)).length;
+    // 与体检条保持同一口径：一个站点所有上游都不健康，才算它挂了
+    const unhealthy = sites.filter(
+      (x) => x.enable && x.running && x.upstreams.length && x.upstreams.every((u) => !u.healthy),
+    ).length;
     const certs = Array.isArray(this.certs) ? this.certs : [];
     const graded = certs
       .map((c) => ({ c, d: daysLeft(this._certMeta(c).notAfter) }))
       .filter((x) => x.d != null);
-    const nextCert =
-      graded.filter((x) => x.d >= 0).sort((a, b) => a.d - b.d)[0] ||
-      graded.sort((a, b) => b.d - a.d)[0];
+    // 取最紧急的那张（含已过期），和体检条保持同一口径
+    const nextCert = graded.sort((a, b) => a.d - b.d)[0];
     const ddnsTasks = Array.isArray(this.ddns) ? this.ddns : [];
 
     return html`
+      ${this._healthBar()}
       <div class="grid4">
         ${this._kpi({
     label: 'CPU 使用率',
@@ -558,7 +594,7 @@ export class GatelyMain extends SunPanelPageElement {
         <div class="card tile">
           <div class="chead"><h3>站点</h3><a class="link" @click=${() => (this.tab = 'sites')}>管理详情 ›</a></div>
           <div class="tnum">${enabled}<em>/ ${sites.length || 0} 启用</em></div>
-          <div class="chint">${unhealthy ? `${unhealthy} 个后端异常` : '全部后端健康'}</div>
+          <div class="chint">${unhealthy ? `${unhealthy} 个站点后端全挂` : '全部后端健康'}</div>
         </div>
         <div class="card tile">
           <div class="chead"><h3>证书</h3><a class="link" @click=${() => (this.tab = 'certs')}>管理详情 ›</a></div>
@@ -1232,6 +1268,71 @@ export class GatelyMain extends SunPanelPageElement {
       background: rgba(24, 168, 136, 0.16);
       color: #5eead4;
       font-weight: 600;
+    }
+
+    /* 体检条：概览顶上一句话，正常时绿、有问题时黄或红 */
+    .health {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      flex: none;
+      flex-wrap: wrap;
+      padding: 8px 12px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .health i {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      flex: none;
+    }
+    .health b {
+      font-weight: 600;
+      flex: none;
+    }
+    .health span {
+      color: rgba(255, 255, 255, 0.5);
+    }
+    .health.ok {
+      background: rgba(52, 211, 153, 0.1);
+      color: #6ee7b7;
+    }
+    .health.warn {
+      background: rgba(251, 191, 36, 0.12);
+      color: #fcd34d;
+    }
+    .health.err {
+      background: rgba(248, 113, 113, 0.13);
+      color: #fca5a5;
+    }
+    .health .hlist {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .health .hlist a {
+      color: inherit;
+      opacity: 0.88;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      text-decoration-thickness: 0.5px;
+    }
+    .health .hlist a:hover {
+      opacity: 1;
+    }
+    /* 多个问题之间加个分隔点，不然两条挤在一起读不清 */
+    .health .hlist a + a::before {
+      content: '·';
+      margin-right: 12px;
+      opacity: 0.45;
+      text-decoration: none;
+      display: inline-block;
     }
 
     .grid4 {

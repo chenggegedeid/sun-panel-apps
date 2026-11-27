@@ -212,10 +212,28 @@ export class GatelyWidget extends SunPanelWidgetElement {
     if (!this.store?.configured) return { cls: 'idle', text: '未配置' };
     if (p === 'error') return { cls: 'err', text: '连接失败' };
     if (p === 'loading' && !this.snap.ts) return { cls: 'idle', text: '连接中' };
+    // 有异常就把状态位让给它：小卡片上这一格比「运行中」有用得多
+    const alerts = this.snap.alerts || [];
+    if (alerts.length) {
+      const err = alerts.some((a) => a.level === 'err');
+      return { cls: err ? 'err' : 'warn', text: `${alerts.length} 个问题` };
+    }
     const g = this.snap.gateway;
     if (g && !g.enabled) return { cls: 'warn', text: '网关已停用' };
-    if (g && g.unhealthy) return { cls: 'warn', text: `${g.unhealthy} 个后端异常` };
     return { cls: 'ok', text: '运行中' };
+  }
+
+  /** 顶部警告条：只在有异常时出现，正常时什么都不渲染 */
+  _alertBar() {
+    const list = this.snap.alerts || [];
+    if (!list.length) return nothing;
+    const err = list.some((a) => a.level === 'err');
+    const first = list[0];
+    const more = list.length > 1 ? ` +${list.length - 1}` : '';
+    return html`<div
+      class="abar ${err ? 'err' : 'warn'}"
+      title=${list.map((a) => a.text).join(' · ')}
+    ><i></i><span>${first.text}${more}</span></div>`;
   }
 
   // ---------- 小组件 ----------
@@ -291,7 +309,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
       <div class="head h-${size}">
         ${this._dot(st.cls, size === 'sm' ? 6 : 7)}
         <span class="name">${this._title()}</span>
-        ${withStatus ? html`<span class="state">${st.text}</span>` : ''}
+        ${withStatus ? html`<span class="state ${st.cls}">${st.text}</span>` : ''}
       </div>
     `;
   }
@@ -321,11 +339,15 @@ export class GatelyWidget extends SunPanelWidgetElement {
     const m = this.cfg.metrics;
     const { v, unit } = this._value(m[0] || 'qps');
     const second = this._value(m[1] || 'bw');
+    // 1x1 只有 116×116，塞不下警告条：直接拿它顶掉「次指标」那一行
+    const a0 = (this.snap.alerts || [])[0];
     return html`
       <div class="s1" @click=${() => this._openMain()}>
         <div class="s1top">${this._dot(this._status().cls, 6)}<span class="s1name">${this._title()}</span></div>
         <div class="s1big">${v}<em>${unit}</em></div>
-        <div class="s1sub">${second.v}</div>
+        <div class="s1sub ${a0 ? (a0.level === 'err' ? 'err' : 'warn') : ''}">
+          ${a0 ? a0.text : second.v}
+        </div>
         <div class="s1spark">${this._spark('auto', { fill: false })}</div>
       </div>
     `;
@@ -336,6 +358,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
     return html`
       <div class="col" @click=${() => this._openMain()}>
         ${this._head({ size: 'sm' })}
+        ${this._alertBar()}
         <div class="chips">${this._chips(m.slice(0, 2))}</div>
         ${this._spark('auto')}
         <div class="minilist">
@@ -368,6 +391,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
     return html`
       <div class="col" @click=${() => this._openMain()}>
         ${this._head({ size: 'md' })}
+        ${this._alertBar()}
         <div class="chips quad">${this._chips(m.slice(0, 4))}</div>
         ${this._spark('auto')}
       </div>
@@ -379,6 +403,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
     return html`
       <div class="col wide" @click=${() => this._openMain()}>
         ${this._head({ size: 'md' })}
+        ${this._alertBar()}
         <div class="split">
           <div class="chips quad left">${this._chips(m.slice(0, 4))}</div>
           <div class="chart">${this._spark('auto', { showLegend: true })}</div>
@@ -394,6 +419,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
     return html`
       <div class="col" @click=${() => this._openMain()}>
         ${this._head({ size: 'lg' })}
+        ${this._alertBar()}
         <div class="chips grid6">${this._chips(m.slice(0, 6))}</div>
         ${this._spark('auto', { showLegend: true })}
         ${sites.length
@@ -419,7 +445,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
           ${this._dot(this._status().cls, 7)}
           <div class="rowtitle">
             <span class="name">${this._title()}</span>
-            <span class="state">${this._status().text}</span>
+            <span class="state ${this._status().cls}">${this._status().text}</span>
           </div>
         </div>
         <div class="chips row grow">${this._chips(m.slice(0, 6), { compact: true })}</div>
@@ -445,6 +471,9 @@ export class GatelyWidget extends SunPanelWidgetElement {
       `--accent:${theme.accent}`,
       `--hairline:${theme.hairline}`,
       `--chipbg:${theme.chipBg()}`,
+      // 警告色按明暗换一档，浅底上用深一点的黄/红才看得清
+      `--warn:${theme.isDark ? '#fbbf24' : '#b45309'}`,
+      `--err:${theme.isDark ? '#f87171' : '#dc2626'}`,
     ].join(';');
 
     let body;
@@ -521,6 +550,8 @@ export class GatelyWidget extends SunPanelWidgetElement {
     }
     .size-4x4 .spark {
       min-height: 150px;
+      /* 有警告条时剩余空间更多，不设上限会把站点列表挤到贴边 */
+      max-height: 200px;
     }
 
     .dot {
@@ -572,6 +603,15 @@ export class GatelyWidget extends SunPanelWidgetElement {
       color: var(--soft);
       white-space: nowrap;
       flex: none;
+    }
+    /* 头部状态跟着异常走色：有问题时不能还是灰的 */
+    .state.warn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+    .state.err {
+      color: var(--err);
+      font-weight: 600;
     }
 
     .col {
@@ -769,6 +809,46 @@ export class GatelyWidget extends SunPanelWidgetElement {
       text-overflow: ellipsis;
       margin-top: 1px;
     }
+    .s1sub.warn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+    .s1sub.err {
+      color: var(--err);
+      font-weight: 600;
+    }
+
+    /* 警告条：只在有异常时出现，正常时完全不占位 */
+    .abar {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: none;
+      min-width: 0;
+      padding: 3px 7px;
+      border-radius: 6px;
+      font-size: 10.5px;
+      line-height: 1.35;
+      background: rgba(251, 191, 36, 0.15);
+      color: var(--warn);
+    }
+    .abar i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+      flex: none;
+    }
+    .abar span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .abar.err {
+      background: rgba(248, 113, 113, 0.16);
+      color: var(--err);
+    }
 
     /* 2x4：左边指标，右边曲线 */
     .split {
@@ -824,6 +904,15 @@ export class GatelyWidget extends SunPanelWidgetElement {
       font-size: 9.5px;
       color: var(--soft);
       white-space: nowrap;
+    }
+    /* 这两条要写在 .rowtitle .state 之后，否则会被它的灰色盖掉 */
+    .rowtitle .state.warn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+    .rowtitle .state.err {
+      color: var(--err);
+      font-weight: 600;
     }
     .row .chips {
       flex: 1 1 auto;

@@ -12,8 +12,14 @@
  */
 
 import { createClient, GatelyError, normalizeHost } from './api.js';
+import { parseCertPem, certTitle } from './x509.js';
+import { daysLeft, fmtPct } from './format.js';
 
 const DEFAULT_INTERVAL = 15;
+/** 证书不会分钟级变化，半天拉一次就够 */
+const CERT_TTL = 6 * 3600e3;
+/** 封禁基线的观察窗口 */
+const BAN_WINDOW = 24 * 3600e3;
 
 function emptySnap() {
   return {
@@ -48,6 +54,8 @@ function emptySnap() {
     guard: null,
     // 趋势采样（{t,qps,bps,active}）
     hist: [],
+    // 异常清单：{level:'err'|'warn', text, tab}，正常时为空数组
+    alerts: [],
   };
 }
 
@@ -189,6 +197,11 @@ export class GatewayStore {
     this.hist = [];
     // 全站趋势按 minutes 缓存，避免主窗口和卡片各拉一遍
     this._trendCache = {};
+    // 最近到期的证书（半天拉一次就够了）
+    this.certInfo = null;
+    this._certAt = 0;
+    // 封禁数的 24 小时基线，用来判断「突然涨了」
+    this._banBase = null;
   }
 
   get id() {
@@ -364,6 +377,90 @@ export class GatewayStore {
     return value;
   }
 
+  /**
+   * 证书到期情况：半天拉一次。
+   *
+   * 卡片要能说「证书 6 天后到期」，但证书几乎不变，按轮询频率拉会把接口打满；
+   * 权限不足或 ssl 模块关闭时静默失败 —— 不能因为看不了证书就把整张卡拖成错误态。
+   */
+  async _loadCerts() {
+    const now = Date.now();
+    if (this._certAt && now - this._certAt < CERT_TTL) return;
+    this._certAt = now;
+    try {
+      const list = await this.client().certs();
+      let best = null;
+      (Array.isArray(list) ? list : []).forEach((c) => {
+        const pem = c?.certPem ? parseCertPem(c.certPem) : null;
+        const iso = c?.info?.notAfter || (pem?.notAfter ? new Date(pem.notAfter).toISOString() : '');
+        const d = daysLeft(iso);
+        if (d == null) return;
+        if (!best || d < best.days) {
+          best = { days: d, name: certTitle(c, pem || { domains: [], notAfter: 0, issuer: '' }) };
+        }
+      });
+      this.certInfo = best;
+    } catch {
+      /* 没 ssl:read 或模块没开，下次再试 */
+    }
+  }
+
+  /**
+   * 汇总这一台现在有几件事值得提。
+   * 上游用宽松判定：一个站点所有上游都不健康才算它挂了，避免备份节点长期挂着导致天天空报。
+   */
+  _applyAlerts(snap) {
+    const out = [];
+    const g = snap.gateway;
+    if (!snap.ts) {
+      snap.alerts = out;
+      return;
+    }
+
+    if (g && !g.enabled) out.push({ level: 'err', text: '网关已停用', tab: 'overview' });
+
+    if (g) {
+      const dead = g.sites.filter(
+        (s) => s.enable && s.running && s.upstreams.length && s.upstreams.every((u) => !u.healthy),
+      );
+      if (dead.length) {
+        out.push({
+          level: 'warn',
+          text: dead.length === 1 ? `「${dead[0].name}」后端全挂` : `${dead.length} 个站点后端全挂`,
+          tab: 'sites',
+        });
+      }
+    }
+
+    if (snap.diskPct >= 90) {
+      out.push({ level: 'warn', text: `磁盘已用 ${fmtPct(snap.diskPct, 0)}`, tab: 'overview' });
+    }
+
+    if (this.certInfo) {
+      const d = this.certInfo.days;
+      if (d < 0) out.push({ level: 'err', text: '证书已过期', tab: 'certs' });
+      else if (d <= 14) out.push({ level: 'warn', text: `证书 ${Math.round(d)} 天后到期`, tab: 'certs' });
+    }
+
+    const jump = this._checkBans(snap.guard);
+    if (jump >= 10) out.push({ level: 'warn', text: `封禁 24h 增 ${jump} 条`, tab: 'bans' });
+
+    // 严重的排前面：小卡片只放得下第一条，得让最该看的那条站前面
+    out.sort((a, b) => (a.level === 'err' ? 0 : 1) - (b.level === 'err' ? 0 : 1));
+    snap.alerts = out;
+  }
+
+  /** 封禁数的 24 小时基线：第一次只记录不说话，攒够窗口再比 */
+  _checkBans(guard) {
+    const count = Number(guard?.bans) || 0;
+    const now = Date.now();
+    if (!this._banBase || now - this._banBase.at > BAN_WINDOW) {
+      this._banBase = { at: now, count };
+      return 0;
+    }
+    return Math.max(0, count - this._banBase.count);
+  }
+
   async refresh({ quiet = false } = {}) {
     if (!this.configured) {
       this.snap = emptySnap();
@@ -415,9 +512,17 @@ export class GatewayStore {
       });
       if (this.hist.length > 120) this.hist.splice(0, this.hist.length - 120);
       this.snap.hist = this.hist.slice();
+      this._applyAlerts(this.snap);
       this._lastAt = Date.now();
       this.inflight = null;
       this._emit();
+      // 证书半天才变，放后台拉，别拖慢这一轮；拿到后重算一次异常再推给界面
+      if (!this.certInfo || Date.now() - this._certAt > CERT_TTL) {
+        this._loadCerts().then(() => {
+          this._applyAlerts(this.snap);
+          this._emit();
+        });
+      }
       return this.snap;
     })();
 
