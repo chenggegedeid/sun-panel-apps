@@ -8,13 +8,14 @@
  *   1. 按 512 网格重绘（官方坐标 ×16），3× 超采样降采样，小尺寸边缘不发虚；
  *   2. 留出标准应用图标安全边距（16/512），贴边圆角在小卡片里更容易被裁切。
  *
- * 用法：node build/make-icon.mjs [输出名]
+ * 用法：node build/make-icon.mjs [输出名] [尺寸]
+ *   默认 256（应用内显示够用）；商店上传要 512 就传第三个参数
  * 纯手写 PNG，无第三方依赖。
  */
 import { deflateSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 
-const OUT = 256;
+const OUT = Math.min(1024, Math.max(64, Number(process.argv[3]) || 256));
 const SS = 3;
 const S = OUT * SS;
 const k = S / 512;
@@ -193,5 +194,9 @@ const png = Buffer.concat([
 ]);
 
 const outName = process.argv[2] || 'icon.png';
-writeFileSync(new URL(`../public/${outName}`, import.meta.url), png);
+// 带路径的写到项目里对应位置（如 docs/icon-512.png），只给文件名则放 public/
+const outPath = /[\\/]/.test(outName)
+  ? new URL(`../${outName}`, import.meta.url)
+  : new URL(`../public/${outName}`, import.meta.url);
+writeFileSync(outPath, png);
 console.log(`${outName} written:`, png.length, 'bytes');
