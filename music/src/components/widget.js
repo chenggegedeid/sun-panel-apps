@@ -179,6 +179,9 @@ export class MusicWidget extends SunPanelWidgetElement {
       <div class="meta">
         <div class="tt ${kind}">${name}</div>
         <div class="st">${sub}</div>
+        ${this.ps.lyricLine && kind !== 'xs'
+    ? html`<div class="lrc">${this.ps.lyricLine}</div>`
+    : ''}
       </div>
     `;
   }
@@ -391,6 +394,16 @@ export class MusicWidget extends SunPanelWidgetElement {
     }
     .tt.xl {
       font-size: 16px;
+    }
+    .lrc {
+      margin-top: 3px;
+      font-size: 11px;
+      line-height: 1.35;
+      color: rgba(255, 255, 255, 0.55);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
     .st {
       font-size: 10.5px;

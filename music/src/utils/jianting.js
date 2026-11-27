@@ -134,6 +134,8 @@ export async function search(server, keyword, { platform = 'kuwo', limit = 40 } 
 
 /** 首页列表：每日推荐 / 榜单 */
 export async function list(server, tab = 'daily', limit = 40) {
+  // 未知标签（例如切换服务类型时残留的 Subsonic 排序）一律按每日推荐处理
+  if (!JIANTING_TABS.some((t) => t.id === tab)) tab = 'daily';
   if (tab === 'daily') {
     const data = await auth(server, '/api/user/recommend/daily');
     return (data?.songs || []).slice(0, limit).map(mapTrack);

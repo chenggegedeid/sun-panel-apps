@@ -127,6 +127,9 @@ export class MusicMain extends SunPanelPageElement {
     window.addEventListener('keydown', this._keyHandler);
 
     if (this.server) {
+      // 服务类型不同，可用的列表标签也不同，先对齐到第一个
+      const tabs = tabsFor(this.server);
+      if (!tabs.some((t) => t.id === this.tab)) this.tab = tabs[0]?.id || this.tab;
       player.setServer(this.server);
       this._syncPlayer();
       this._loadAlbums();
@@ -141,6 +144,9 @@ export class MusicMain extends SunPanelPageElement {
       this.queue = snap.queue;
       this.qIndex = snap.index;
       if (snap.error) this.error = snap.error;
+      // 把当前歌词行同步给播放器，卡片上也能看到
+      const li = this._lineIndex();
+      player.setLyricLine(li >= 0 && this.lyrics?.lines?.[li] ? this.lyrics.lines[li].text : '');
       // 只有进度在变时限流重渲染，避免整页每 240ms 重绘一次
       const sig = `${snap.cur?.id}|${snap.playing}|${snap.loading}|${snap.error}|${snap.queue.length}|${snap.index}|${snap.mode}`;
       if (sig === this._sig) {

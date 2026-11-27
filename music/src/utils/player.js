@@ -21,6 +21,7 @@ class Player {
     this._lastEmit = 0;
     this.mode = 'order';   // order | single | shuffle
     this.volume = 0.8;
+    this.lyricLine = '';
   }
 
   get cur() {
@@ -72,6 +73,7 @@ class Player {
       server: this.server,
       mode: this.mode,
       volume: this.volume,
+      lyricLine: this.lyricLine,
     };
   }
 
@@ -266,6 +268,14 @@ class Player {
     a.src = '';
     this.queue = [];
     this.index = -1;
+    this._emit(true);
+  }
+
+  /** 当前歌词行（卡片上显示用） */
+  setLyricLine(text) {
+    const t = (text || '').trim();
+    if (t === this.lyricLine) return;
+    this.lyricLine = t;
     this._emit(true);
   }
 
