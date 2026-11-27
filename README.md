@@ -10,6 +10,7 @@
 |---|---|---|---|
 | **日历倒计时** | 背景真正透明的日历 / 倒计时卡片，支持农历、二十四节气与自定义纪念日，七种尺寸自适应 | [`calendar/`](calendar/) | Sun-Panel 应用商店搜「日历倒计时」 |
 | **音乐** | 在导航页里播放自建音乐库。卡片即播放器，点开有专辑墙、搜索和同步歌词，兼容 Subsonic 接口 | [`music/`](music/) | Sun-Panel 应用商店搜「音乐」 |
+| **Gately 网关** | 自托管网关 Gately 的看板。卡片看 QPS / 带宽 / 拦截，点开可管站点、证书、封禁 | [`gately/`](gately/) | 手动安装 `chenggegedeid-Gately-x.x.x.zip` |
 
 ## 日历倒计时
 
@@ -32,6 +33,18 @@
 
 完整说明见 [music/README.md](music/README.md)，附一个批量补歌词的脚本 [music/tools/fetch-lyrics.py](music/tools/fetch-lyrics.py)。
 
+## Gately 网关
+
+![Gately 卡片](gately/docs/screenshots/01-cards-dark.png)
+
+- 卡片七种尺寸逐个排版：QPS、实时带宽、处理中、站点、封禁、CPU 内存都能上卡
+- 趋势曲线从 0 起算，透明 / 毛玻璃 / 纯色三种底色，深浅色自动适配
+- 主窗口五个标签：概览、站点、证书、封禁、日志
+- 能直接改配置：启停站点、封禁或解封 IP、续期证书
+- 令牌权限按读 / 写分层，只读令牌也能完整看监控
+
+需要 [Gately](https://github.com/wangwanjie/gately) 后台建的 API 令牌。完整说明见 [gately/README.md](gately/README.md)。
+
 ## 目录结构
 
 ```
@@ -42,15 +55,16 @@
 │  ├─ docs/screenshots/  #   商店截图
 │  └─ package.json       #   npm run dev / pack
 ├─ music/                # 音乐（独立微应用工程，结构同上）
+├─ gately/               # Gately 网关（独立微应用工程，结构同上，另带本地模拟器）
 └─ LICENSE               # 统一许可证：禁止商业使用
 ```
 
-两个应用互不依赖，各自 `npm install && npm run dev` 即可开发。
+三个应用互不依赖，各自 `npm install && npm run dev` 即可开发。
 
 ## 开发一个应用
 
 ```bash
-cd music           # 或 calendar
+cd music           # 或 calendar / gately
 npm install
 npm run dev        # 开发服务器，带热更新
 npm run pack       # 打包生产版到 packages/

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gately 微应用 · 本地预览</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: #0b0f14;
+      color: #e6edf3;
+    }
+    .bar {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 10px 16px; background: #121a1f; border-bottom: 1px solid #1e2a31;
+      position: sticky; top: 0; z-index: 9; font-size: 12px;
+    }
+    .bar b { font-size: 13px; }
+    .bar select, .bar button {
+      font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 6px;
+      background: #1b272e; color: inherit; border: 1px solid #283840; cursor: pointer;
+    }
+    .stage { padding: 18px; }
+    .themed { padding: 16px; border-radius: 14px; margin-bottom: 18px; }
+    .light { background: linear-gradient(135deg, #dfe9f3 0%, #f3e7e9 45%, #e8f0e4 100%); color: #15171a; }
+    .dark { background: linear-gradient(135deg, #101820 0%, #1b1430 55%, #0d1f1c 100%); }
+    h4 { margin: 0 0 10px; font-size: 12px; font-weight: 600; opacity: 0.6; letter-spacing: 0.4px; }
+    .row { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
+    .cell { display: flex; flex-direction: column; gap: 5px; }
+    .lbl { font-size: 10px; opacity: 0.5; }
+    .frame { overflow: hidden; border-radius: 14px; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <b>Gately 微应用预览</b>
+    <span style="opacity:.55">数据来自本地模拟器</span>
+    <label>主题 <select id="theme"><option value="both">浅色 + 深色</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+    <label>尺寸 <select id="only">
+      <option value="">全部</option>
+      <option value="1x1">1x1</option>
+      <option value="1x2">1x2</option>
+      <option value="2x1">2x1</option>
+      <option value="2x2">2x2</option>
+      <option value="2x4">2x4</option>
+      <option value="4x4">4x4</option>
+      <option value="1xfull">1xfull</option>
+    </select></label>
+    <button id="pick">打开主窗口预览</button>
+    <button id="cfg">打开设置页预览</button>
+  </div>
+
+  <div class="stage" id="stage"></div>
+  <div class="stage" id="panels"></div>
+
+  <script type="module">
+    import pkg from '/src/main.js';
+    import { gateway } from '/src/utils/gateway.js';
+
+    // 无头浏览器里 document.hidden 为真，会跳过轮询；预览时强制当可见处理
+    try {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    } catch { /* 忽略 */ }
+
+    // ---------- 宿主 API 模拟 ----------
+    const store = new Map();
+    store.set('conn', { host: 'http://gately.example.com:16680', token: 'gtl_preview_only', interval: 15 });
+    store.set('settings', { title: '', metrics: ['qps', 'bw', 'conn', 'sites', 'bans', 'cpu'], trend: 'auto', bgMode: 'transparent', radius: 14, textMode: 'auto' });
+
+    const api = {
+      network: {
+        request: async ({ request }) => {
+          const url = String(request.targetUrl).replace(/^https?:\/\/[^/]+/, '/mock-gately');
+          const res = await fetch(url, { method: request.method || 'GET', headers: request.headers, body: request.body });
+          const data = await res.json().catch(() => null);
+          if (!res.ok) {
+            const err = new Error(`HTTP ${res.status}`);
+            err.response = { status: res.status, data };
+            throw err;
+          }
+          return { status: res.status, data };
+        },
+      },
+      dataNode: {
+        user: {
+          getByKey: async (_n, k) => (store.has(k) ? store.get(k) : null),
+          getByKeys: async (_n, keys) => Object.fromEntries(keys.map((k) => [k, store.get(k)])),
+          setByKeys: async (_n, items) => { Object.entries(items).forEach(([k, v]) => store.set(k, v)); },
+          setByKey: async (_n, k, v) => { store.set(k, v); },
+        },
+      },
+      window: {
+        open: (opts) => {
+          // 预览里直接把窗口内容渲染到下面，方便截图
+          const host = document.getElementById('panels');
+          host.innerHTML = '';
+          const wrap = document.createElement('div');
+          wrap.style.cssText = 'width:' + (opts.windowConfig?.width || 900) + 'px;height:' + (opts.windowConfig?.height || 700) + 'px;border-radius:14px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.5);background:#0c1211';
+          const el = document.createElement('div');
+          el.style.cssText = 'display:block;height:100%';
+          wrap.appendChild(el);
+          host.appendChild(wrap);
+          mount(opts.componentName, el, opts.windowConfig);
+          return 'preview';
+        },
+      },
+      timer: {
+        setInterval: window.setInterval.bind(window),
+        clearInterval: window.clearInterval.bind(window),
+        setTimeout: window.setTimeout.bind(window),
+        clearTimeout: window.clearTimeout.bind(window),
+      },
+      mainAppInfo: { get: async () => ({ version: '2.0.0', isPro: true }) },
+      systemMonitor: { register: () => 'x', unregister: () => {}, fetchData: async () => null, getSystemInfo: async () => null },
+    };
+
+    let darkOverride = null;
+    const ctx = (extra = {}) => ({
+      api,
+      darkMode: darkOverride === null ? !!extra.dark : darkOverride,
+      language: 'zh-CN',
+      networkMode: 'wan',
+      role: 2,
+      ...extra,
+    });
+
+    const registry = {};
+    Object.entries(pkg.components.pages || {}).forEach(([name, cfg]) => {
+      registry[name] = cfg.component;
+      if (!customElements.get(`gately-page-${name}`)) customElements.define(`gately-page-${name}`, cfg.component);
+    });
+    Object.entries(pkg.components.widgets || {}).forEach(([name, cfg]) => {
+      registry[name] = cfg.component;
+      if (!customElements.get(`gately-widget-${name}`)) customElements.define(`gately-widget-${name}`, cfg.component);
+    });
+
+    function mount(componentName, host, windowConfig) {
+      const cfg = pkg.components.pages[componentName];
+      if (!cfg) return null;
+      const el = document.createElement(`gately-page-${componentName}`);
+      el.style.display = 'block';
+      el.style.height = '100%';
+      el.spCtx = ctx({ background: cfg.background, widgetInfo: { widgetId: componentName, config: {}, gridSize: '1x1', title: '' }, customParam: {} });
+      host.appendChild(el);
+      el.onInitialized?.({ customParam: {} });
+      window.__last = el;
+      return el;
+    }
+
+    const SIZES = [
+      ['1x1', 116, 116],
+      ['1x2', 116, 244],
+      ['2x1', 244, 116],
+      ['2x2', 244, 244],
+      ['2x4', 500, 244],
+      ['4x4', 500, 500],
+      ['1xfull', 1080, 116],
+    ];
+
+    function build(dark) {
+      const stage = document.getElementById('stage');
+      const theme = document.createElement('div');
+      theme.className = 'themed ' + (dark ? 'dark' : 'light');
+      theme.innerHTML = `<h4>${dark ? '深色壁纸' : '浅色壁纸'} · 卡片</h4>`;
+      stage.appendChild(theme);
+
+      darkOverride = dark;
+      const only = document.getElementById('only').value;
+      const rows = [[], []];
+      SIZES.forEach(([name, w, h], i) => {
+        if (only && only !== name) return;
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        const lbl = document.createElement('span');
+        lbl.className = 'lbl';
+        lbl.textContent = `${name} · ${w}×${h}`;
+        const frame = document.createElement('div');
+        frame.className = 'frame';
+        frame.style.cssText = `width:${w}px;height:${h}px;`;
+        const el = document.createElement('div');
+        el.style.cssText = 'width:100%;height:100%;display:block';
+        frame.appendChild(el);
+        const comp = document.createElement('gately-widget-gately-widget');
+        comp.style.display = 'block';
+        comp.style.width = '100%';
+        comp.style.height = '100%';
+        comp.spCtx = {
+          ...ctx({ dark }),
+          widgetInfo: { widgetId: `w${i}`, config: {}, gridSize: name, title: '' },
+          defaultBackgroundColor: '',
+        };
+        el.appendChild(comp);
+        comp.onInitialized?.();
+        cell.appendChild(lbl);
+        cell.appendChild(frame);
+        (w > 300 ? rows[1] : rows[0]).push(cell);
+      });
+
+      const r0 = document.createElement('div');
+      r0.className = 'row';
+      rows[0].forEach((c) => r0.appendChild(c));
+      const r1 = document.createElement('div');
+      r1.className = 'row';
+      rows[1].forEach((c) => r1.appendChild(c));
+      theme.appendChild(r0);
+      theme.appendChild(r1);
+    }
+
+    function rebuild() {
+      const mode = document.getElementById('theme').value;
+      const stage = document.getElementById('stage');
+      stage.innerHTML = '';
+      if (mode === 'light' || mode === 'both') build(false);
+      if (mode === 'dark' || mode === 'both') build(true);
+      darkOverride = null;
+    }
+
+    document.getElementById('theme').addEventListener('change', rebuild);
+    document.getElementById('only').addEventListener('change', rebuild);
+    document.getElementById('pick').addEventListener('click', () => {
+      api.window.open({ componentName: 'gately-main', windowConfig: { width: 1120, height: 760 } });
+      document.getElementById('panels').scrollIntoView({ behavior: 'smooth' });
+    });
+    document.getElementById('cfg').addEventListener('click', () => {
+      api.window.open({ componentName: 'gately-config', windowConfig: { width: 760, height: 760 } });
+      document.getElementById('panels').scrollIntoView({ behavior: 'smooth' });
+    });
+
+    // 截图模式：?shot=1 去掉工具栏与标注，只留卡片或窗口
+    const q = new URLSearchParams(location.search);
+    const shot = q.get('shot');
+    if (q.get('theme')) document.getElementById('theme').value = q.get('theme');
+    if (q.get('only')) document.getElementById('only').value = q.get('only');
+    if (shot) {
+      document.querySelector('.bar').style.display = 'none';
+      const st = document.querySelector('.stage');
+      st.style.padding = '24px';
+      const style = document.createElement('style');
+      style.textContent = '.themed{background:transparent!important;padding:0!important} .themed h4{display:none}';
+      document.head.appendChild(style);
+      // 截图底色跟随主题，浅色卡片不能压深色底
+      document.body.style.background =
+        q.get('theme') === 'light'
+          ? 'radial-gradient(120% 90% at 12% 0%, #eef3f8 0%, #e5ebf3 46%, #dee5ee 100%)'
+          : 'radial-gradient(120% 90% at 12% 0%, #1d2b3a 0%, #131a24 42%, #0b1016 100%)';
+    }
+
+    rebuild();
+
+    // ?panel=main / ?panel=config 直接渲染对应窗口，方便截图
+    const panel = new URLSearchParams(location.search).get('panel');
+    if (panel) {
+      document.querySelector('.stage').style.display = 'none';
+      const bar = document.querySelector('.bar');
+      bar.style.display = 'none';
+      const hp = Number(new URLSearchParams(location.search).get('h')) || (panel === 'config' ? 760 : 760);
+      api.window.open({
+        componentName: panel === 'config' ? 'gately-config' : 'gately-main',
+        windowConfig: panel === 'config' ? { width: 760, height: hp } : { width: 1120, height: hp },
+      });
+      const tab = new URLSearchParams(location.search).get('tab');
+      if (tab && window.__last) window.__last.tab = tab;
+    }
+
+    // 预灌几轮采样，卡片上的趋势曲线才有形状可看
+    (async () => {
+      for (let i = 0; i < 12; i += 1) {
+        await gateway.refresh();
+        await new Promise((r) => setTimeout(r, 60));
+      }
+    })();
+  </script>
+</body>
+</html>
