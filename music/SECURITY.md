@@ -76,4 +76,4 @@ static createElement(t, e) {
 
 `innerHTML` 若要彻底消除，只能更换模板引擎，代价过大且无安全收益，故保持现状。
 
-如有疑问，欢迎通过 [GitHub @chenggegedeid](https://github.com/chenggegedeid) 或 contact@example.com 联系。
+如有疑问，欢迎通过 [GitHub @chenggegedeid](https://github.com/chenggegedeid) 联系。

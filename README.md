@@ -62,4 +62,4 @@ npm run pack       # 打包生产版到 packages/
 
 **禁止商业使用。** 个人可免费使用、修改；分发需保留署名与许可证；修改后须标注「已修改」并同样禁止商用；商用需书面授权。
 
-完整条款见 [LICENSE](LICENSE)。联系：[GitHub @chenggegedeid](https://github.com/chenggegedeid) · contact@example.com
+完整条款见 [LICENSE](LICENSE)。联系：[GitHub @chenggegedeid](https://github.com/chenggegedeid)
