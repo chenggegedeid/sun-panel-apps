@@ -1,5 +1,5 @@
 /**
- * 简听（music.example.com / music-downloader）接口适配
+ * 简听（music-downloader）接口适配
  *
  * 与 Subsonic 的区别：
  *   - 歌曲是「曲库搜索 + 榜单 + 每日推荐」，没有专辑目录

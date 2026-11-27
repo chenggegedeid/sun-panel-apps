@@ -129,7 +129,7 @@
 
 ```nginx
 location /music/ {
-    proxy_pass http://192.168.1.10:5666/music/;   # 路径前缀必须保留
+    proxy_pass http://192.168.1.10:4533/music/;   # 改成你自己的音乐服务地址，路径前缀必须保留
     proxy_http_version 1.1;
     proxy_set_header Host              $host;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
