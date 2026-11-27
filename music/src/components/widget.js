@@ -4,6 +4,7 @@ import { buildTheme, resolveConfig } from '../utils/theme.js';
 import { normalizeServers, activeServer, coverUrl, fmtTime, hostOf,
   setRequestAdapter,
 } from '../utils/subsonic.js';
+import { coverFor } from '../utils/provider.js';
 import { player } from '../utils/player.js';
 
 export class MusicWidget extends SunPanelWidgetElement {
@@ -128,15 +129,17 @@ export class MusicWidget extends SunPanelWidgetElement {
   _cover(size) {
     const s = this.server;
     const song = this.ps.cur;
-    const bad = song?.coverArt && this._badCovers?.has(song.coverArt);
-    if (s && song?.coverArt && !bad) {
+    const key = song?.id;
+    const bad = key && this._badCovers?.has(key);
+    const url = s && song && !bad ? coverFor(s, song, size * 2) : '';
+    if (url) {
       return html`<img
         class="cov"
         style="width:${size}px;height:${size}px"
-        src=${coverUrl(s, song.coverArt, size * 2)}
+        src=${url}
         alt=""
         @error=${() => {
-    this._badCovers.add(song.coverArt);
+    this._badCovers.add(key);
     this.requestUpdate();
   }}
       />`;

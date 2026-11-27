@@ -4,6 +4,7 @@ import { DEFAULT_CONFIG, resolveConfig, hexToRgba } from '../utils/theme.js';
 import { normalizeServers, normalizeBase, ping, uid, hostOf, SubsonicError,
   setRequestAdapter,
 } from '../utils/subsonic.js';
+import { PROVIDERS, pingServer, providerMeta } from '../utils/provider.js';
 
 const BG_MODES = [
   { value: 'transparent', label: '完全透明', desc: '不画底色，直接透出壁纸' },
@@ -114,6 +115,7 @@ export class MusicConfig extends SunPanelPageElement {
       url: '',
       user: '',
       password: '',
+      type: 'subsonic',
       default: this.servers.length === 0,
     };
     this.servers = [...this.servers, s];
@@ -136,10 +138,10 @@ export class MusicConfig extends SunPanelPageElement {
     }
     this.testResult = { ...this.testResult, [s.id]: { state: 'testing' } };
     try {
-      const body = await ping({
+      const body = await pingServer({
+        ...s,
         url: normalizeBase(s.url),
-        user: s.user,
-        password: s.password,
+        type: s.type || 'subsonic',
       });
       this.testResult = {
         ...this.testResult,
@@ -164,6 +166,7 @@ export class MusicConfig extends SunPanelPageElement {
           url: normalizeBase(s.url),
           user: (s.user || '').trim(),
           password: s.password || '',
+          type: s.type || 'subsonic',
           default: s.id === this.activeId,
         }));
 
@@ -260,7 +263,7 @@ export class MusicConfig extends SunPanelPageElement {
           <div>
             <h1>音乐</h1>
             <p>
-              连接 Subsonic 协议的音乐服务（Navidrome / Gonic / Airsonic / Jellyfin），
+              连接自建音乐服务：Subsonic 协议（Navidrome / Gonic / Airsonic / Jellyfin）或简听，
               卡片点开就是播放器，歌单、封面、进度都在面板里。
             </p>
           </div>
@@ -299,10 +302,21 @@ export class MusicConfig extends SunPanelPageElement {
                         <button class="del" title="删除" @click=${() => this._remove(s.id)}>×</button>
                       </div>
                       <div class="item-row">
+                        <select
+                          class="stype"
+                          .value=${s.type || 'subsonic'}
+                          @change=${(e) => this._update(s.id, { type: e.target.value })}
+                        >
+                          ${PROVIDERS.map(
+    (p) => html`<option value=${p.id} ?selected=${(s.type || 'subsonic') === p.id}>
+                              ${p.label}
+                            </option>`,
+  )}
+                        </select>
                         <input
                           class="url"
                           .value=${s.url}
-                          placeholder="http://192.168.1.10:4533"
+                          placeholder=${providerMeta(s.type).fields.find((f) => f.key === 'url')?.placeholder || 'http://地址:端口'}
                           @input=${(e) => this._update(s.id, { url: e.target.value })}
                         />
                         <button
@@ -546,6 +560,20 @@ export class MusicConfig extends SunPanelPageElement {
     }
     input.name:focus {
       border-bottom-color: rgba(244, 63, 94, 0.6);
+    }
+    select.stype {
+      font-size: 12px;
+      padding: 5px 6px;
+      border-radius: 7px;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      background: #fff;
+      color: inherit;
+      outline: none;
+      flex: none;
+    }
+    .dark select.stype {
+      background: rgba(0, 0, 0, 0.28);
+      border-color: rgba(255, 255, 255, 0.12);
     }
     input.url,
     input.cred {

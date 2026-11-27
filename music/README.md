@@ -2,7 +2,7 @@
 
 在导航页里直接播放你自建的音乐库。卡片本身就是播放器，点开是完整的专辑墙、搜索和同步歌词。
 
-> 兼容 **Navidrome / Gonic / Airsonic / Jellyfin** 等任何支持 Subsonic 接口的音乐服务。
+> 兼容 **Navidrome / Gonic / Airsonic / Jellyfin** 等 Subsonic 接口服务，也支持自建的 **简听** 音乐站。
 >
 > ⚠️ **禁止商业使用**，详见 [LICENSE](../LICENSE)。
 
@@ -51,6 +51,7 @@
 | [Gonic](https://github.com/sentriz/gonic) | 极轻量，无网页界面，适合只当后台用 |
 | [Airsonic](https://airsonic.github.io/) | 功能全，但基于 Java，内存占用高 |
 | Jellyfin | 需在设置里开启 Subsonic 兼容接口 |
+| [简听](https://github.com/chenggegedeid) | 自建音乐站（music-downloader），搜索 / 榜单 / 每日推荐 / 同步歌词 |
 
 只要实现了 Subsonic / OpenSubsonic 的 `ping`、`getAlbumList2`、`getAlbum`、`search3`、`stream`、`getCoverArt`、`getLyricsBySongId`，就能用。
 
@@ -84,6 +85,31 @@
 ```
 
 看到这个就说明通了，点「保存」。
+
+
+### 接入更多服务（开发者）
+
+音乐服务做成了一层注册表（`src/utils/provider.js`），界面不关心底层协议。新增一种服务只要实现下面这组方法：
+
+```js
+{
+  id: 'xxx',                 // 服务类型标识
+  label: 'XXX',              // 配置页显示名
+  desc: '一句话说明',
+  supportsAlbums: false,     // 是否有「专辑 → 曲目」两级结构
+  fields: [...],             // 配置页要填的字段
+  tabs: [{ id, name }],      // 首页可选列表（榜单 / 推荐）
+  ping(server),              // 连接测试
+  list(server, {tab, keyword}),   // → { kind: 'albums' | 'songs', songs? , albums? }
+  album(server, id),         // supportsAlbums 为 true 时实现
+  play(server, song),        // → 可直接给 <audio src> 的地址
+  cover(server, song, size), // → 可直接给 <img src> 的地址
+  lyrics(server, song),      // → LRC 文本
+}
+```
+
+然后把它加进 `PROVIDERS` 数组即可，配置页、列表、播放条、歌词全部自动适配。
+已验证可用的落地案例：`jianting.js`（简听）就是按这个接口写的，约 200 行。
 
 ### 地址怎么填（最容易错的地方）
 

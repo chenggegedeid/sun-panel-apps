@@ -84,6 +84,12 @@ export function hasRequestAdapter() {
   return !!requestAdapter;
 }
 
+/** 供其他协议（如简听）复用同一个宿主网络透传 */
+export async function hostRequest(options) {
+  if (!requestAdapter) throw new Error('网络接口未就绪，请重新打开应用');
+  return requestAdapter(options);
+}
+
 export class SubsonicError extends Error {
   constructor(message, code) {
     super(message);
@@ -299,6 +305,7 @@ export function normalizeServers(list) {
       url: normalizeBase(s.url),
       user: s.user || '',
       password: s.password || '',
+      type: s.type || 'subsonic',
       default: !!s.default,
     }));
 }

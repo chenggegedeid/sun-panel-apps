@@ -13,6 +13,14 @@ import {
   SubsonicError,
   setRequestAdapter,
 } from '../utils/subsonic.js';
+import {
+  listFor,
+  albumFor,
+  lyricsFor,
+  tabsFor,
+  isJianting,
+  coverFor,
+} from '../utils/provider.js';
 import { player } from '../utils/player.js';
 
 const TABS = [
@@ -170,7 +178,9 @@ export class MusicMain extends SunPanelPageElement {
     this._lyricIdx = -1;
     this.requestUpdate();
     try {
-      const r = await getLyrics(this.server, song);
+      const r = isJianting(this.server)
+        ? this._parseLrc(await lyricsFor(this.server, song))
+        : await getLyrics(this.server, song);
       if (this._lyricsFor === id) {
         this.lyrics = r;
         this.requestUpdate();
@@ -283,8 +293,15 @@ export class MusicMain extends SunPanelPageElement {
     this.loading = true;
     this.error = '';
     try {
-      this.albums = await getAlbums(this.server, this.tab, 48, 0);
-      this.view = 'albums';
+      const r = await listFor(this.server, { tab: this.tab });
+      if (r.kind === 'albums') {
+        this.albums = r.albums || [];
+        this.view = 'albums';
+      } else {
+        this.albums = [];
+        this.songs = r.songs || [];
+        this.view = 'songs';
+      }
     } catch (e) {
       this._fail(e);
     } finally {
@@ -296,8 +313,8 @@ export class MusicMain extends SunPanelPageElement {
     this.loading = true;
     this.error = '';
     try {
-      const { album, songs } = await getAlbum(this.server, id);
-      this.album = album;
+      const songs = await albumFor(this.server, id);
+      this.album = this.albums.find((a) => a.id === id) || { id, name: '' };
       this.songs = songs;
       this.view = 'album';
     } catch (e) {
@@ -316,10 +333,16 @@ export class MusicMain extends SunPanelPageElement {
     this.loading = true;
     this.error = '';
     try {
-      const r = await search(this.server, q);
-      this.albums = r.albums;
-      this.songs = r.songs;
-      this.view = 'search';
+      const r = await listFor(this.server, { keyword: q });
+      if (r.kind === 'albums') {
+        this.albums = r.albums || [];
+        this.songs = [];
+        this.view = 'search';
+      } else {
+        this.albums = [];
+        this.songs = r.songs || [];
+        this.view = 'songs';
+      }
     } catch (e) {
       this._fail(e);
     } finally {
@@ -409,10 +432,95 @@ export class MusicMain extends SunPanelPageElement {
     `;
   }
 
+
+  /** 当前服务支持的列表标签（Subsonic 是专辑排序，简听是榜单） */
+  _tabs() {
+    return tabsFor(this.server).map((t) => ({ key: t.id, label: t.name }));
+  }
+
+  _songCover(song, size = 40) {
+    const key = song?.id;
+    const bad = key && this._badCovers.has(key);
+    const u = song && !bad ? coverFor(this.server, song, size) : '';
+    if (!u) return html`<div class="cover ph" style="width:${size}px;height:${size}px">♪</div>`;
+    return html`<img
+      class="cover"
+      style="width:${size}px;height:${size}px"
+      src=${u}
+      alt=""
+      loading="lazy"
+      @error=${() => {
+    this._badCovers.add(key);
+    this.requestUpdate();
+  }}
+    />`;
+  }
+
+  /** 歌曲列表（简听这类没有专辑结构的服务用） */
+  _songView() {
+    const curId = this.cur?.id;
+    return html`
+      <div class="tabs">
+        ${this._tabs().map(
+    (t) => html`<button
+            class="tab ${this.tab === t.key ? 'on' : ''}"
+            @click=${() => {
+    this.tab = t.key;
+    this.query = '';
+    this._loadAlbums();
+  }}
+          >
+            ${t.label}
+          </button>`,
+  )}
+      </div>
+      <div class="songs">
+        ${this.songs.map(
+    (song, i) => html`<div
+            class="srow ${curId === song.id ? 'on' : ''}"
+            @click=${() => this._playFrom(this.songs, i)}
+          >
+            ${this._songCover(song, 40)}
+            <div class="smeta">
+              <div class="sn">${song.title}</div>
+              <div class="sa">${song.artist}${song.album ? ` · ${song.album}` : ''}</div>
+            </div>
+            <div class="sd">${song.duration ? fmtTime(song.duration) : ''}</div>
+          </div>`,
+  )}
+        ${!this.songs.length ? html`<div class="empty">没有找到歌曲</div>` : ''}
+      </div>
+    `;
+  }
+
+  /** LRC 文本 → 与结构化歌词一致的格式 */
+  _parseLrc(text) {
+    if (!text) return null;
+    const lines = [];
+    const re = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+    let synced = false;
+    for (const raw of String(text).split(/\r?\n/)) {
+      const tags = [...raw.matchAll(re)];
+      const content = raw.replace(re, '').trim();
+      if (!tags.length) {
+        if (content) lines.push({ start: null, text: content });
+        continue;
+      }
+      synced = true;
+      for (const m of tags) {
+        const sec = Number(m[1]) * 60 + Number(m[2]) + Number(m[3] || 0) / 1000;
+        lines.push({ start: sec, text: content });
+      }
+    }
+    if (!lines.length) return null;
+    if (synced) lines.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+    return { synced, lines };
+  }
+
   _albumGrid() {
     return html`
       <div class="tabs">
-        ${TABS.map(
+        ${this._tabs().map(
     (t) => html`<button
             class="tab ${this.tab === t.key ? 'on' : ''}"
             @click=${() => {
@@ -613,7 +721,7 @@ export class MusicMain extends SunPanelPageElement {
   }
 
   render() {
-    if (this.loading && !this.albums.length && !this.album) {
+    if (this.loading && !this.albums.length && !this.album && !this.songs.length) {
       return html`<div class="wrap center"><span class="spin"></span> 正在连接…</div>`;
     }
 
@@ -637,6 +745,7 @@ export class MusicMain extends SunPanelPageElement {
           ${this.view === 'albums' ? this._albumGrid() : ''}
           ${this.view === 'album' ? this._albumView() : ''}
           ${this.view === 'search' ? this._searchView() : ''}
+          ${this.view === 'songs' ? this._songView() : ''}
           ${this.loading ? html`<div class="loading"><span class="spin"></span></div>` : ''}
           ${this._lyricsPanel()}
         </div>
@@ -1208,6 +1317,56 @@ export class MusicMain extends SunPanelPageElement {
       font-size: 11.5px;
       font-weight: 600;
       color: rgba(232, 234, 240, 0.62);
+    }
+    .songs {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow-y: auto;
+      padding-bottom: 8px;
+    }
+    .srow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .srow:hover {
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .srow.on {
+      background: rgba(244, 63, 94, 0.16);
+    }
+    .smeta {
+      flex: 1;
+      min-width: 0;
+    }
+    .sn {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sa {
+      font-size: 11.5px;
+      color: rgba(232, 234, 240, 0.55);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sd {
+      font-size: 11.5px;
+      color: rgba(232, 234, 240, 0.45);
+      font-variant-numeric: tabular-nums;
+    }
+    .empty {
+      padding: 24px;
+      text-align: center;
+      font-size: 12.5px;
+      color: rgba(232, 234, 240, 0.5);
     }
     .p-ctrls {
       display: flex;

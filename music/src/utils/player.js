@@ -6,7 +6,8 @@
  * 放在模块作用域，只要面板页面没刷新，音乐就一直在放——
  * 关掉播放窗口不会中断，多张卡片看到的是同一个播放状态。
  */
-import { streamUrl, getRandomSongs, coverUrl } from './subsonic.js';
+import { getRandomSongs } from './subsonic.js';
+import { streamFor, coverFor, listFor, getProvider } from './provider.js';
 
 class Player {
   constructor() {
@@ -135,7 +136,10 @@ class Player {
     this.error = '';
     this._emit(true);
     try {
-      const list = await getRandomSongs(this.server, 30);
+      const provider = getProvider(this.server);
+      const list = provider.supportsAlbums
+        ? await getRandomSongs(this.server, 30)
+        : (await listFor(this.server, { tab: provider.tabs?.[0]?.id || 'daily' })).songs || [];
       if (!list.length) {
         this.error = '音乐库是空的，先去 Navidrome 扫一次库';
         this.loading = false;
@@ -153,14 +157,34 @@ class Player {
     }
   }
 
-  _start() {
+  async _start() {
     const song = this.cur;
     if (!song || !this.server) return;
     this.error = '';
     const a = this._audioEl();
     a.volume = this.volume;
-    a.src = streamUrl(this.server, song.id);
+    const seq = (this._seq = (this._seq || 0) + 1);
     this._syncMediaSession();
+
+    let url = '';
+    try {
+      // 简听这类服务的地址是临时签名，必须每播一次取一次
+      url = await streamFor(this.server, song);
+    } catch (e) {
+      if (seq !== this._seq) return;
+      this.error = e?.message || '取播放地址失败';
+      this._emit(true);
+      return;
+    }
+    if (seq !== this._seq) return; // 期间又切歌了，丢弃这次结果
+
+    if (!url) {
+      this.error = '这首歌没有可用的播放地址';
+      this._emit(true);
+      return;
+    }
+
+    a.src = url;
     a.play()
       .then(() => this._emit(true))
       .catch(() => {
@@ -247,7 +271,7 @@ class Player {
 
   cover(size = 120) {
     if (!this.cur || !this.server) return '';
-    return coverUrl(this.server, this.cur.coverArt, size);
+    return coverFor(this.server, this.cur, size);
   }
 }
 
