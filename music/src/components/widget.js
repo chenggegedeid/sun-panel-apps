@@ -240,9 +240,9 @@ export class MusicWidget extends SunPanelWidgetElement {
     const song = this.ps.cur;
     const art = this.server && song ? coverFor(this.server, song, 160) : '';
     return html`
-      <div class="s1" @click=${(e) => this._toggle(e)}>
+      <div class="s1" @click=${() => this._open()}>
         ${art ? html`<img class="s1art" src=${art} alt="" />` : ''}
-        <button class="pb main s1pb" title="播放/暂停">
+        <button class="pb main s1pb" title="播放/暂停" @click=${(e) => this._toggle(e)}>
           ${this._icon(this.ps.playing ? 'pause' : 'play', 40)}
         </button>
         <div class="tt xs">${song ? song.title : '音乐'}</div>
