@@ -55,15 +55,73 @@ export function hostOf(url) {
   }
 }
 
+/** 从各种可能的响应头结构里取一个头 */
+function pickHeader(headers, name) {
+  if (!headers) return '';
+  if (typeof headers.get === 'function') return headers.get(name) || '';
+  const lower = name.toLowerCase();
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === lower) return String(Array.isArray(v) ? v[0] : v);
+  }
+  return '';
+}
+
+/**
+ * 原样打一次请求，把底层拿到的东西全交出来。
+ *
+ * 排查「连上了但数据不对」时最有用：能直接看到实际请求的 URL、状态码、
+ * content-type 和响应开头，不用再猜是地址错了、被反代改了，还是落到了前端页面。
+ */
+export async function probe(url, token = '') {
+  if (!requestAdapter) {
+    return { status: 0, ctype: '', snippet: '', error: '网络接口未就绪，请重新打开应用' };
+  }
+  const headers = { Accept: 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const take = (res, error = '') => {
+    const data = res?.data !== undefined ? res.data : res;
+    let body;
+    if (typeof data === 'string') body = data;
+    else {
+      try {
+        body = JSON.stringify(data);
+      } catch {
+        body = String(data ?? '');
+      }
+    }
+    return {
+      status: Number(res?.status) || 0,
+      ctype: pickHeader(res?.headers, 'content-type').split(';')[0].trim(),
+      snippet: String(body || '').replace(/\s+/g, ' ').slice(0, 300),
+      // 完整正文留给调用方判断类型用（截图里只显示开头）
+      body: String(body || ''),
+      error,
+    };
+  };
+  try {
+    const res = await requestAdapter({ request: { targetUrl: url, method: 'GET', headers } });
+    return take(res);
+  } catch (e) {
+    const res = e?.response;
+    const got = take(res || {}, e?.message || '');
+    // 没拿到状态码，说明连请求都没发出去
+    if (!got.status) got.snippet = '';
+    return got;
+  }
+}
+
 /**
  * 把可疑的响应压成一句人话。
  *
  * 最要紧的是分清「返回了网页」和「返回了别的 JSON」：
  * Gately 的前端是单页应用，未知路径会回退到 index.html 并返回 200，
  * 所以地址填错时拿到的不是 404，而是一个网页。
+ * 带上 content-type 和页面标题，能一眼看出是被谁劫持了（运营商首页 / 路由器页 / 别的站点）。
  */
-function describeBody(raw) {
-  if (raw == null) return '';
+function describeBody(raw, headers) {
+  const ct = pickHeader(headers, 'content-type').split(';')[0].trim();
+  const tail = ct ? `，${ct}` : '';
+  if (raw == null) return `返回内容为空${tail}`;
   let s;
   if (typeof raw === 'string') s = raw;
   else {
@@ -74,15 +132,43 @@ function describeBody(raw) {
     }
   }
   const t = s.trim();
-  if (!t) return '返回内容为空';
+  if (!t) return `返回内容为空${tail}`;
   if (/^<!doctype html|^<html|<head|<body/i.test(t)) {
     const title = t.match(/<title[^>]*>([^<]{0,60})<\/title>/i);
-    return title ? `返回的是网页，标题「${title[1].trim()}」` : '返回的是网页';
+    return title ? `返回的是网页，标题「${title[1].trim()}」${tail}` : `返回的是网页${tail}`;
   }
-  return `返回内容：${t.replace(/\s+/g, ' ').slice(0, 60)}`;
+  return `返回内容：${t.replace(/\s+/g, ' ').slice(0, 60)}${tail}`;
 }
 
-function mapStatus(status, bodyMsg, raw) {
+/**
+ * 判断这是不是 Sun-Panel 自己的代理错误。
+ *
+ * 面板的 network.request 连不上目标时，不会报网络错误，而是返回 200 +
+ * {"code":-1,"data":{"sun_pan*_template_proxy_error...":"..."}}。
+ * 这种响应跟 Gately 一点关系都没有，必须单独认出来，否则会被当成「地址填错」误导排查方向。
+ */
+function isPanelProxyError(raw) {
+  if (!raw) return false;
+  let blob;
+  try {
+    blob = typeof raw === 'string' ? raw : JSON.stringify(raw);
+  } catch {
+    return false;
+  }
+  return /sun_?pan\w*_template_proxy_error|sun_panel_proxy_error/i.test(blob || '');
+}
+
+/** 面板代理失败的统一说法 */
+function proxyError(status = 200) {
+  return new GatelyError(
+    '面板的网络透传没能连上这台服务器（Sun-Panel 返回了自己的代理错误，不是 Gately 的响应）。'
+      + '最常见的两个原因：域名只解析到 IPv6 而面板没有 IPv6 出口；或面板所在网络访问不到这个端口。'
+      + '能在本机浏览器打开，不代表面板也能——先试试面板能直连的内网地址。',
+    { status, kind: 'proxy' },
+  );
+}
+
+function mapStatus(status, bodyMsg, raw, headers) {
   if (status === 401) {
     return new GatelyError('令牌无效或已过期，请在 Gately「API 令牌」页重新生成', { status, kind: 'auth' });
   }
@@ -103,9 +189,10 @@ function mapStatus(status, bodyMsg, raw) {
   }
   // 200 也走到这里，说明请求成功但内容不是接口数据
   if (status >= 200 && status < 300) {
-    const info = describeBody(raw);
+    if (isPanelProxyError(raw)) return proxyError(status);
+    const info = describeBody(raw, headers);
     return new GatelyError(
-      `接口返回 200，但内容不是 Gately 的接口数据${info ? `（${info}）` : ''}。地址没指到接口根：`
+      `接口返回 200，但内容不是 Gately 的接口数据（${info}）。地址没指到接口根：`
         + '经反代或子路径部署时要把路径一起写上，例如 https://nas.example.com/gately',
       { status, kind: 'parse' },
     );
@@ -142,8 +229,9 @@ export function createClient(conn) {
     } catch (e) {
       const status = e?.response?.status || e?.status || 0;
       const raw = e?.response?.data;
+      const headers = e?.response?.headers;
       const bodyMsg = (raw && typeof raw === 'object' && raw.error) || '';
-      if (status) throw mapStatus(status, bodyMsg, raw);
+      if (status) throw mapStatus(status, bodyMsg, raw, headers);
       const msg = e?.response?.data?.message || e?.message || '';
       if (e?.type === 'microApp' || /permission|白名单|domain/i.test(msg)) {
         throw new GatelyError('面板拒绝了这次请求：请确认已授予 network 权限，且该地址在域名白名单内', { kind: 'panel' });
@@ -186,6 +274,7 @@ export function createClient(conn) {
     status: async () => {
       const v = await request('GET', '/api/status');
       if (!v || typeof v !== 'object' || (!v.version && !v.host)) {
+        if (isPanelProxyError(v)) throw proxyError();
         throw new GatelyError(
           '这个地址响应了，但返回的字段不像 Gately。确认填的是 Gately 的管理端口（默认 16680），'
             + '不是站点域名或面板自己的地址',

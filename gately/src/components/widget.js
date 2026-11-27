@@ -11,6 +11,7 @@ const COLOR = Object.fromEntries(METRICS.map((m) => [m.key, m.color]));
 /** 卡片放不下完整报错，按错误类型给一句短的 */
 const BRIEF = {
   parse: '地址指向了网页',
+  proxy: '面板连不上这台',
   auth: '令牌无效',
   scope: '令牌缺少权限',
   network: '连不上',

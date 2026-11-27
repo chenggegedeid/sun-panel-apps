@@ -2,7 +2,7 @@ import { SunPanelPageElement } from '@sun-panel/micro-app';
 import { html, css } from 'lit';
 import { resolveConfig, METRICS, DEFAULT_CONFIG } from '../utils/theme.js';
 import { gateway } from '../utils/gateway.js';
-import { setRequestAdapter, createClient, normalizeHost, hostOf } from '../utils/api.js';
+import { setRequestAdapter, createClient, normalizeHost, hostOf, probe } from '../utils/api.js';
 import {
   readConfig, writeServers, writeWidgetConfig, normalizeServers, newId, serverLabel, emitConfigSaved,
   KEY_SETTINGS, NODE,
@@ -43,6 +43,7 @@ export class GatelyConfig extends SunPanelPageElement {
     tests: { state: true },
     tokenOpen: { state: true },
     pendingDel: { state: true },
+    diag: { state: true },
   };
 
   constructor() {
@@ -71,6 +72,7 @@ export class GatelyConfig extends SunPanelPageElement {
     this.dark = false;
     this.migrated = false;
     this.pendingDel = '';
+    this.diag = null;
   }
 
   _bindNetwork() {
@@ -209,6 +211,30 @@ export class GatelyConfig extends SunPanelPageElement {
         });
       }
     }
+  }
+
+  /**
+   * 诊断：原样打一次 /api/status，把实际 URL、状态码、类型和响应开头摊开。
+   * 「连上了但数据不对」的时候，这一屏比任何猜测都管用。
+   */
+  async _diag(s) {
+    const base = normalizeHost(s.host);
+    if (!base) {
+      this._say('先填管理地址', 'err');
+      return;
+    }
+    const url = `${base}/api/status`;
+    this.diag = { id: s.id, url, status: 0, ctype: '', snippet: '', error: '请求中…', verdict: '' };
+    const r = await probe(url, String(s.token || '').trim());
+    // 给人一句结论：这是 Gately 的接口、还是落到了网页、还是别的东西
+    // 用完整正文判断（status 的 version 在 JSON 末尾，截断会漏）
+    const full = r.body || r.snippet || '';
+    let verdict = 'other';
+    if (/sun_?pan\w*_template_proxy_error|"code"\s*:\s*-1/.test(full)) verdict = 'proxy';
+    else if (/^<!doctype html|<html/i.test(full)) verdict = 'html';
+    else if (/"version"\s*:|"hostname"\s*:/.test(full)) verdict = 'gately';
+    delete r.body;
+    this.diag = { id: s.id, url, ...r, verdict };
   }
 
   _say(text, kind = 'ok') {
@@ -370,10 +396,31 @@ export class GatelyConfig extends SunPanelPageElement {
             @input=${(e) => this._patch(s.id, { token: e.target.value })}
           />
           <button class="ghost small" @click=${() => this._toggleToken(s.id)}>${open ? '隐藏' : '显示'}</button>
+          <button class="ghost small" @click=${() => this._diag(s)}>诊断</button>
           <button class="ghost small" @click=${() => this._test(s)} ?disabled=${t?.busy}>
             ${t?.busy ? '测试中…' : '测试'}
           </button>
         </div>
+        ${this.diag?.id === s.id
+    ? html`<div class="diagbox">
+              <div class="dline"><span class="dk">实际请求</span><code>${this.diag.url}</code></div>
+              <div class="dline">
+                <span class="dk">响应</span>
+                <b class="dstatus ${this.diag.status >= 200 && this.diag.status < 300 ? 'warn' : 'good'}">
+                  ${this.diag.status || '无响应'}
+                </b>
+                <span class="dct">${this.diag.ctype || '未知类型'}</span>
+                <span class="dverdict ${this.diag.verdict === 'gately' ? 'good' : 'warn'}">
+                  ${this.diag.verdict === 'gately' ? '· 接口正常'
+    : this.diag.verdict === 'html' ? '· 返回的是网页'
+      : this.diag.verdict === 'proxy' ? '· 面板代理失败'
+        : this.diag.verdict ? '· 内容不是 Gately' : ''}
+                </span>
+              </div>
+              ${this.diag.snippet ? html`<pre class="dbody">${this.diag.snippet}</pre>` : ''}
+              ${this.diag.error ? html`<div class="derr">${this.diag.error}</div>` : ''}
+            </div>`
+    : ''}
         ${t
     ? html`<div class="tres ${t.ok === true ? 'ok' : t.ok === false ? 'no' : 'wait'}">
               <i></i><span>${t.text}</span>
@@ -840,6 +887,83 @@ export class GatelyConfig extends SunPanelPageElement {
       font-style: normal;
       opacity: 0.6;
       flex: none;
+    }
+
+    /* 诊断面板：把原始响应摊开来 */
+    .diagbox {
+      margin-top: 7px;
+      padding: 8px 10px;
+      border-radius: 9px;
+      background: rgba(15, 23, 42, 0.045);
+      border: 1px solid rgba(15, 23, 42, 0.09);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    .dark .diagbox {
+      background: rgba(255, 255, 255, 0.045);
+      border-color: rgba(255, 255, 255, 0.09);
+    }
+    .dline {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 3px;
+      flex-wrap: wrap;
+    }
+    .dk {
+      flex: none;
+      font-size: 10.5px;
+      opacity: 0.55;
+    }
+    .dline code {
+      font-size: 10.5px;
+      word-break: break-all;
+      opacity: 0.9;
+    }
+    .dstatus {
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .dstatus.warn {
+      color: #e11d48;
+    }
+    .dstatus.good {
+      color: #0f9d76;
+    }
+    .dct {
+      font-size: 10.5px;
+      opacity: 0.6;
+    }
+    .dverdict {
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+    .dverdict.good {
+      color: #0f9d76;
+    }
+    .dverdict.warn {
+      color: #e11d48;
+    }
+    .dbody {
+      margin: 5px 0 0;
+      padding: 6px 8px;
+      border-radius: 6px;
+      background: rgba(15, 23, 42, 0.06);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 96px;
+      overflow: auto;
+    }
+    .dark .dbody {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .derr {
+      margin-top: 4px;
+      font-size: 10.5px;
+      color: #e11d48;
     }
 
     .field {
