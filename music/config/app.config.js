@@ -9,7 +9,7 @@ export default {
   author: 'chenggegedeid',
   // 应用唯一标识
   microAppId: 'chenggegedeid-Music',
-  version: '1.2.0',
+  version: '2.0.0',
   entry: 'main.js',
   icon: 'icon.png',
   debug: false,
@@ -28,10 +28,11 @@ export default {
   defaultLocale: 'zh-CN',
 
   // 只需要数据节点（存服务器地址与外观设置）
-  permissions: ['dataNode'],
+  // network：接口请求走宿主网络透传（api.network.request），不再用原生 fetch
+  permissions: ['dataNode', 'network'],
 
-  // 播放页用 iframe 直接嵌，不做后端请求，无需域名白名单
-  networkDomains: [],
+  // 目标音乐服务器由用户自行填写，域名不可预知，因此放开全部域名
+  networkDomains: ['*'],
 
   dataNodes: {
     music: {

@@ -4,29 +4,35 @@
 
 ---
 
-## 1. NATIVE_API: fetch × 2
+## 1. 网络请求：已改用宿主 network.request
 
-两处 `fetch` 都是功能必需，且请求目标受控。
+> **2.0.0 起已按平台规范改造**：应用内不再使用原生 `fetch`，所有接口请求都通过宿主提供的 `this.spCtx.api.network.request()`（网络透传）发出。
 
-| 序号 | 来源 | 作用 | 目标地址 |
-|---|---|---|---|
-| 1 | `@sun-panel/micro-app` SDK | 加载语言包 | 面板自身的静态资源 `{staticPath}/locales/zh-CN.json` |
-| 2 | `src/utils/subsonic.js` → `call()` | 调用 Subsonic 接口 | **用户在配置页自己填写的音乐服务器** |
+改造前静态扫描会报 `NATIVE_API: fetch`（2 处）：
 
-第 2 处的调用代码（`src/utils/subsonic.js`）：
+| 序号 | 来源 | 说明 |
+|---|---|---|
+| 1 | `@sun-panel/micro-app` SDK | 加载语言包 `{staticPath}/locales/zh-CN.json`，属 SDK 自身行为 |
+| 2 | 应用自身 | 调用 Subsonic 接口，**2.0.0 已改为 network.request** |
+
+现有实现（`src/utils/subsonic.js`）：
 
 ```js
-res = await fetch(url, { signal: ctrl.signal, credentials: 'omit', mode: 'cors' });
+// 组件初始化时注入宿主 API
+setRequestAdapter((opts) => this.spCtx.api.network.request(opts));
+
+// 请求时只传 URL，由宿主代为发出
+response = await requestAdapter({ request: { targetUrl: url, method: 'GET' } });
 ```
 
-安全约束：
+配套改动：
 
-- `url` = `normalizeBase(server.url)` + 固定接口路径，`server.url` 只能由用户在配置页填写，代码里没有任何硬编码的远程地址
-- `credentials: 'omit'` —— 不携带 Cookie，跨域调用不会泄露面板登录态
-- 12 秒超时（`AbortController`），失败只影响本次请求
-- 全包检索无第三方域名、无埋点、无 CDN
+- `app.config.js` 声明 `permissions: ['dataNode', 'network']`
+- `networkDomains: ['*']` —— 目标服务器由用户自行填写，域名不可预知，因此放开全部域名
+- 不再需要 `credentials: 'omit'`：请求由宿主持有，浏览器侧不携带任何 Cookie
+- 跨域不再由浏览器限制，改由宿主转发，`CORS` 相关问题自然消失
 
-这是网页播放器访问远程音乐库的唯一方式：浏览器里没有其他 API 能在不发 Cookie 的前提下读取跨域 JSON。
+因此现在产物中只剩 SDK 自身那 1 处 `fetch`（语言包加载），应用代码 0 处。
 
 ## 2. DOM_SECURITY: innerHTML × 2
 
@@ -65,9 +71,9 @@ static createElement(t, e) {
 
 上述 4 条提示属于「使用了某个 API」的事实陈述，不是可利用的漏洞：
 
-- `fetch` 是访问用户自建音乐服务的必要手段，且目标完全由用户决定
+- 网络请求已按平台规范改用 `api.network.request`，应用代码中不再有原生 `fetch`
 - `innerHTML` 属于 lit-html 的模板编译过程，输入为静态字符串
 
-如需进一步降低扫描噪音，可以把 `fetch` 换成 `XMLHttpRequest`，或用 `innerHTML` 之外的解析方式引入框架——但两者都不会带来实际安全收益，因此保持现状。
+`innerHTML` 若要彻底消除，只能更换模板引擎，代价过大且无安全收益，故保持现状。
 
 如有疑问，欢迎通过 [GitHub @chenggegedeid](https://github.com/chenggegedeid) 或 contact@example.com 联系。

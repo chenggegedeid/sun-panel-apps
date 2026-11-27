@@ -1,7 +1,9 @@
 import { SunPanelWidgetElement } from '@sun-panel/micro-app';
 import { html, css } from 'lit';
 import { buildTheme, resolveConfig } from '../utils/theme.js';
-import { normalizeServers, activeServer, coverUrl, fmtTime, hostOf } from '../utils/subsonic.js';
+import { normalizeServers, activeServer, coverUrl, fmtTime, hostOf,
+  setRequestAdapter,
+} from '../utils/subsonic.js';
 import { player } from '../utils/player.js';
 
 export class MusicWidget extends SunPanelWidgetElement {
@@ -31,7 +33,13 @@ export class MusicWidget extends SunPanelWidgetElement {
     return activeServer(this.servers, this.activeId || this.cfg.activeId);
   }
 
+  _bindNetwork() {
+    const net = this.spCtx?.api?.network;
+    if (net?.request) setRequestAdapter((opts) => net.request(opts));
+  }
+
   onInitialized() {
+    this._bindNetwork();
     this._load();
     this._unsub = player.subscribe((snap) => {
       this.ps = snap;

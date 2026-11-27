@@ -11,6 +11,7 @@ import {
   fmtTime,
   hostOf,
   SubsonicError,
+  setRequestAdapter,
 } from '../utils/subsonic.js';
 import { player } from '../utils/player.js';
 
@@ -79,7 +80,13 @@ export class MusicMain extends SunPanelPageElement {
     return activeServer(this.servers, this.activeId);
   }
 
+  _bindNetwork() {
+    const net = this.spCtx?.api?.network;
+    if (net?.request) setRequestAdapter((opts) => net.request(opts));
+  }
+
   async onInitialized({ customParam } = {}) {
+    this._bindNetwork();
     try {
       const dn = this.spCtx?.api?.dataNode?.user;
       const list = await dn?.getByKey('music', 'servers');

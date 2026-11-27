@@ -1,7 +1,9 @@
 import { SunPanelPageElement } from '@sun-panel/micro-app';
 import { html, css } from 'lit';
 import { DEFAULT_CONFIG, resolveConfig, hexToRgba } from '../utils/theme.js';
-import { normalizeServers, normalizeBase, ping, uid, hostOf, SubsonicError } from '../utils/subsonic.js';
+import { normalizeServers, normalizeBase, ping, uid, hostOf, SubsonicError,
+  setRequestAdapter,
+} from '../utils/subsonic.js';
 
 const BG_MODES = [
   { value: 'transparent', label: '完全透明', desc: '不画底色，直接透出壁纸' },
@@ -63,7 +65,13 @@ export class MusicConfig extends SunPanelPageElement {
     this.loading = true;
   }
 
+  _bindNetwork() {
+    const net = this.spCtx?.api?.network;
+    if (net?.request) setRequestAdapter((opts) => net.request(opts));
+  }
+
   onInitialized({ widgetInfo } = {}) {
+    this._bindNetwork();
     const cfg = resolveConfig(widgetInfo?.config);
     this.bgMode = cfg.bgMode;
     this.bgColor = cfg.bgColor;

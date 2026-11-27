@@ -68,6 +68,22 @@ function buildUrl(server, endpoint, params = {}) {
   return `${base}/rest/${endpoint}.view?${p.toString()}`;
 }
 
+/**
+ * 请求适配器
+ *
+ * 按商店规范，网络请求必须走宿主提供的 api.network.request（网络透传），
+ * 不要在微应用里直接用 fetch。各组件初始化时把宿主 API 注入进来。
+ */
+let requestAdapter = null;
+
+export function setRequestAdapter(fn) {
+  requestAdapter = typeof fn === 'function' ? fn : null;
+}
+
+export function hasRequestAdapter() {
+  return !!requestAdapter;
+}
+
 export class SubsonicError extends Error {
   constructor(message, code) {
     super(message);
@@ -79,35 +95,39 @@ export class SubsonicError extends Error {
 /**
  * 调用一个 API 端点，返回 subsonic-response 内部对象
  */
-export async function call(server, endpoint, params = {}, timeout = 15000) {
+export async function call(server, endpoint, params = {}) {
   if (!server || !server.url) throw new SubsonicError('还没有配置服务器');
+  if (!requestAdapter) throw new SubsonicError('网络接口未就绪，请重新打开应用');
 
   const url = buildUrl(server, endpoint, params);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeout);
 
-  let res;
+  let response;
   try {
-    res = await fetch(url, { signal: ctrl.signal, credentials: 'omit', mode: 'cors' });
+    response = await requestAdapter({ request: { targetUrl: url, method: 'GET' } });
   } catch (e) {
-    clearTimeout(timer);
-    if (e?.name === 'AbortError') throw new SubsonicError('请求超时，服务器没有响应');
-    // 跨域被拦时浏览器只给一句 "Failed to fetch"，这里翻译成人话
-    throw new SubsonicError('连接失败：可能是跨域被拦截，或地址填错了。建议改成 https 的同源反代地址');
-  }
-  clearTimeout(timer);
-
-  if (!res.ok) {
-    if (res.status === 404) {
+    const status = e?.response?.status;
+    if (status === 404) {
       throw new SubsonicError('接口 404：地址可能多了网页路径（如 /app），Subsonic 接口在域名根下的 /rest');
     }
-    throw new SubsonicError(`服务器返回 HTTP ${res.status}`);
+    if (status) throw new SubsonicError(`服务器返回 HTTP ${status}`);
+    // 宿主侧错误：权限不足 / 域名不在白名单 / 网络不通
+    const msg = e?.response?.data?.message || e?.message || '';
+    if (e?.type === 'microApp' || /permission|白名单|domain/i.test(msg)) {
+      throw new SubsonicError('面板拒绝了这次请求：请确认已授予 network 权限，且该地址在域名白名单内');
+    }
+    throw new SubsonicError('连接失败：地址填错了，或音乐服务器不可达');
   }
 
-  let data;
-  try {
-    data = await res.json();
-  } catch {
+  // 宿主返回 AxiosResponse 风格对象，取 data
+  let data = response?.data !== undefined ? response.data : response;
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      throw new SubsonicError('服务器返回的不是有效数据，检查地址是否指向音乐服务');
+    }
+  }
+  if (!data) {
     throw new SubsonicError('返回的不是 JSON，地址可能指向了别的服务');
   }
 
@@ -126,7 +146,7 @@ export async function call(server, endpoint, params = {}, timeout = 15000) {
 }
 
 export async function ping(server) {
-  return call(server, 'ping', {}, 8000);
+  return call(server, 'ping');
 }
 
 /** 专辑列表：newest | recent | frequent | random | alphabeticalByName */

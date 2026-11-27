@@ -1,7 +1,7 @@
 {
   "appJsonVersion": "1.1",
   "author": "chenggegedeid",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "entry": "main.js",
   "icon": "icon.png",
   "debug": false,
@@ -16,9 +16,12 @@
   },
   "defaultLocale": "zh-CN",
   "permissions": [
-    "dataNode"
+    "dataNode",
+    "network"
   ],
-  "networkDomains": [],
+  "networkDomains": [
+    "*"
+  ],
   "dataNodes": {
     "music": {
       "scope": "user",

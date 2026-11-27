@@ -108,6 +108,25 @@
       player.index = 0;
 
       const api = {
+        // 预览环境用原生请求模拟宿主网络透传（仅开发用，不进构建产物）
+        network: {
+          request: async ({ request }) => {
+            const r = await fetch(request.targetUrl, { headers: request.headers || {} });
+            const text = await r.text();
+            let data = text;
+            try {
+              data = JSON.parse(text);
+            } catch {
+              /* 非 JSON 原样返回 */
+            }
+            if (!r.ok) {
+              const err = new Error('HTTP ' + r.status);
+              err.response = { status: r.status, data };
+              throw err;
+            }
+            return { data, status: r.status };
+          },
+        },
         timer: { setInterval: (f, m) => setInterval(f, m), clearInterval: (i) => clearInterval(i) },
         dataNode: {
           user: {
