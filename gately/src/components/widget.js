@@ -8,6 +8,19 @@ import { fmtNum, fmtBps, fmtPct, clamp, niceTop } from '../utils/format.js';
 
 const COLOR = Object.fromEntries(METRICS.map((m) => [m.key, m.color]));
 
+/** 卡片放不下完整报错，按错误类型给一句短的 */
+const BRIEF = {
+  parse: '地址指向了网页',
+  auth: '令牌无效',
+  scope: '令牌缺少权限',
+  network: '连不上',
+  notfound: '接口不存在',
+  panel: '面板拦截了请求',
+  config: '还没配置',
+  limit: '请求太频繁',
+  server: '网关内部报错',
+};
+
 
 export class GatelyWidget extends SunPanelWidgetElement {
   static properties = {
@@ -285,7 +298,13 @@ export class GatelyWidget extends SunPanelWidgetElement {
   }
 
   _errHint() {
-    return html`<div class="errbar" @click=${() => this._openConfig()}>${this.snap.error || '连接失败'}</div>`;
+    // 卡片只有巴掌大，长句塞不下也不好懂：给一句短标签，完整原因进 title 和设置页
+    const full = String(this.snap.error || '连接失败');
+    const brief = BRIEF[this.snap.errorKind] || full.split(/[。；]/)[0].slice(0, 14) || '连接失败';
+    return html`<div class="errbar" title=${full} @click=${() => this._openConfig()}>
+      <b>${brief}</b>
+      <em>点这里改配置</em>
+    </div>`;
   }
 
   // ---------- 各尺寸 ----------
@@ -869,10 +888,23 @@ export class GatelyWidget extends SunPanelWidgetElement {
       font-size: 10.5px;
       line-height: 1.4;
       color: #f87171;
-      text-align: left;
+      text-align: center;
       display: flex;
+      flex-direction: column;
       align-items: center;
+      justify-content: center;
+      gap: 3px;
       overflow: hidden;
+    }
+    .errbar b {
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .errbar em {
+      font-style: normal;
+      font-size: 9.5px;
+      opacity: 0.6;
+      color: var(--soft);
     }
 
     /* 窄卡片（1x1 / 1x2）放不下一行两个指标块 */

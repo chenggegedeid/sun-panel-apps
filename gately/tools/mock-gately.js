@@ -389,6 +389,16 @@ export function mockGately() {
         const url = new URL(req.url, 'http://x');
         // 预览页会把地址的 hostname 作为 srv 传进来，用来区分不同的演示机器
         S = stateFor(url.searchParams.get('srv'));
+
+        // 专门用来复现「地址填成网页」的情况：200 + 一段 HTML，而不是 JSON。
+        // Gately 的未知路径会回退到 index.html，这正是地址填错时的真实表现。
+        if (String(url.searchParams.get('srv') || '').startsWith('bad')) {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end('<!DOCTYPE html><html><head><title>Gately</title></head><body><div id="app"></div></body></html>');
+          return;
+        }
+
         const path = url.pathname.replace(/^\/mock-gately/, '');
         const method = req.method || 'GET';
 

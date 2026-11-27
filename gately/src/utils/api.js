@@ -55,7 +55,34 @@ export function hostOf(url) {
   }
 }
 
-function mapStatus(status, bodyMsg) {
+/**
+ * 把可疑的响应压成一句人话。
+ *
+ * 最要紧的是分清「返回了网页」和「返回了别的 JSON」：
+ * Gately 的前端是单页应用，未知路径会回退到 index.html 并返回 200，
+ * 所以地址填错时拿到的不是 404，而是一个网页。
+ */
+function describeBody(raw) {
+  if (raw == null) return '';
+  let s;
+  if (typeof raw === 'string') s = raw;
+  else {
+    try {
+      s = JSON.stringify(raw);
+    } catch {
+      s = String(raw);
+    }
+  }
+  const t = s.trim();
+  if (!t) return '返回内容为空';
+  if (/^<!doctype html|^<html|<head|<body/i.test(t)) {
+    const title = t.match(/<title[^>]*>([^<]{0,60})<\/title>/i);
+    return title ? `返回的是网页，标题「${title[1].trim()}」` : '返回的是网页';
+  }
+  return `返回内容：${t.replace(/\s+/g, ' ').slice(0, 60)}`;
+}
+
+function mapStatus(status, bodyMsg, raw) {
   if (status === 401) {
     return new GatelyError('令牌无效或已过期，请在 Gately「API 令牌」页重新生成', { status, kind: 'auth' });
   }
@@ -73,6 +100,15 @@ function mapStatus(status, bodyMsg) {
   }
   if (status === 429) {
     return new GatelyError('请求太频繁，稍后再试', { status, kind: 'limit' });
+  }
+  // 200 也走到这里，说明请求成功但内容不是接口数据
+  if (status >= 200 && status < 300) {
+    const info = describeBody(raw);
+    return new GatelyError(
+      `接口返回 200，但内容不是 Gately 的接口数据${info ? `（${info}）` : ''}。地址没指到接口根：`
+        + '经反代或子路径部署时要把路径一起写上，例如 https://nas.example.com/gately',
+      { status, kind: 'parse' },
+    );
   }
   if (status >= 500) {
     return new GatelyError(bodyMsg || `Gately 返回 HTTP ${status}`, { status, kind: 'server' });
@@ -105,8 +141,9 @@ export function createClient(conn) {
       res = await requestAdapter({ request: req });
     } catch (e) {
       const status = e?.response?.status || e?.status || 0;
-      const bodyMsg = e?.response?.data?.error || '';
-      if (status) throw mapStatus(status, bodyMsg);
+      const raw = e?.response?.data;
+      const bodyMsg = (raw && typeof raw === 'object' && raw.error) || '';
+      if (status) throw mapStatus(status, bodyMsg, raw);
       const msg = e?.response?.data?.message || e?.message || '';
       if (e?.type === 'microApp' || /permission|白名单|domain/i.test(msg)) {
         throw new GatelyError('面板拒绝了这次请求：请确认已授予 network 权限，且该地址在域名白名单内', { kind: 'panel' });
@@ -119,7 +156,10 @@ export function createClient(conn) {
       try {
         data = JSON.parse(data);
       } catch {
-        throw new GatelyError('返回的不是 JSON，地址可能指向了别的服务', { kind: 'parse' });
+        throw new GatelyError(
+          `返回的不是 JSON（${describeBody(data)}），地址可能指向了别的服务`,
+          { kind: 'parse' },
+        );
       }
     }
     if (data && typeof data === 'object' && typeof data.error === 'string' && data.error) {
@@ -137,8 +177,23 @@ export function createClient(conn) {
 
     /** 查看当前身份：令牌名、模块开关、只读与否 */
     session: () => request('GET', '/api/session'),
-    /** 系统与各模块状态（主机 CPU / 内存 / 磁盘、版本、模块列表） */
-    status: () => request('GET', '/api/status'),
+    /**
+     * 系统与各模块状态（主机 CPU / 内存 / 磁盘、版本、模块列表）
+     *
+     * 顺带校验一下字段：地址填到别的服务上时，对方也可能 200 返回一段 JSON，
+     * 与其在界面上显示一排「—」，不如当场说清楚连错地方了。
+     */
+    status: async () => {
+      const v = await request('GET', '/api/status');
+      if (!v || typeof v !== 'object' || (!v.version && !v.host)) {
+        throw new GatelyError(
+          '这个地址响应了，但返回的字段不像 Gately。确认填的是 Gately 的管理端口（默认 16680），'
+            + '不是站点域名或面板自己的地址',
+          { kind: 'parse' },
+        );
+      }
+      return v;
+    },
     /** Web 服务拓扑快照：监听器、站点、QPS、带宽、上游健康 */
     topology: () => request('GET', '/api/webservice/topology'),
     /**

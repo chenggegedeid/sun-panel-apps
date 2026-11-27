@@ -9,7 +9,7 @@ export default {
   author: 'chenggegedeid',
   // 应用唯一标识
   microAppId: 'chenggegedeid-Gately',
-  version: '1.1.0',
+  version: '1.1.1',
   entry: 'main.js',
   icon: 'icon.png',
   debug: false,
