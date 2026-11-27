@@ -84,7 +84,8 @@ export function fmtClock(ts) {
 /** 日期字符串 → 11-27 14:59 */
 export function fmtDateTime(ts) {
   if (!ts) return '—';
-  const t = typeof ts === 'number' ? ts * 1000 : Date.parse(ts);
+  // 数字既可能是秒（接口常见）也可能是毫秒（从 PEM 解析出来的），按位数区分
+  const t = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Date.parse(ts);
   if (!Number.isFinite(t)) return '—';
   const d = new Date(t);
   const p = (n) => String(n).padStart(2, '0');
@@ -92,8 +93,9 @@ export function fmtDateTime(ts) {
 }
 
 /** 剩余天数（证书等），可为负 */
-export function daysLeft(iso) {
-  const t = Date.parse(iso);
+export function daysLeft(v) {
+  // 既支持 ISO 字符串（接口常见），也支持毫秒时间戳（从 PEM 解析出来的）
+  const t = typeof v === 'number' ? v : Date.parse(v);
   if (!Number.isFinite(t)) return null;
   return (t - Date.now()) / 86400000;
 }

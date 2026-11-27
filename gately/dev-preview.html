@@ -66,15 +66,35 @@
     } catch { /* 忽略 */ }
 
     // ---------- 宿主 API 模拟 ----------
+    // 三台演示服务器，都指向本地模拟器，但用 srv 参数让各自的数据不一样
+    const SERVERS = [
+      { id: 'sv-home', name: '家里 NAS', host: 'http://gately.example.com:16680', token: 'gtl_preview_only' },
+      { id: 'sv-office', name: '公司网关', host: 'http://office.example.com:16680', token: 'gtl_preview_only' },
+      { id: 'sv-pi', name: '树莓派', host: 'http://pi.example.com:16680', token: 'gtl_preview_only' },
+    ];
     const store = new Map();
-    store.set('conn', { host: 'http://gately.example.com:16680', token: 'gtl_preview_only', interval: 15 });
-    store.set('settings', { title: '', metrics: ['qps', 'bw', 'conn', 'sites', 'bans', 'cpu'], trend: 'auto', bgMode: 'transparent', radius: 14, textMode: 'auto' });
+    store.set('servers', SERVERS);
+    store.set('settings', {
+      title: '', metrics: ['qps', 'bw', 'conn', 'sites', 'bans', 'cpu'], trend: 'auto',
+      bgMode: 'transparent', radius: 14, textMode: 'auto', refresh: 15, defaultServerId: SERVERS[0].id,
+    });
+    // 每张卡片绑一台（轮流），预览时能直接看出「各盯各的」
+    SERVERS.forEach((s, i) => store.set(`widget:w${i}`, { serverId: s.id }));
+    for (let i = SERVERS.length; i < 7; i += 1) {
+      store.set(`widget:w${i}`, { serverId: SERVERS[i % SERVERS.length].id });
+    }
 
     const api = {
       network: {
         request: async ({ request }) => {
-          const url = String(request.targetUrl).replace(/^https?:\/\/[^/]+/, '/mock-gately');
-          const res = await fetch(url, { method: request.method || 'GET', headers: request.headers, body: request.body });
+          const u = new URL(String(request.targetUrl));
+          const qs = new URLSearchParams(u.search);
+          qs.set('srv', u.hostname);
+          const res = await fetch(`/mock-gately${u.pathname}?${qs}`, {
+            method: request.method || 'GET',
+            headers: request.headers,
+            body: request.body,
+          });
           const data = await res.json().catch(() => null);
           if (!res.ok) {
             const err = new Error(`HTTP ${res.status}`);
@@ -103,7 +123,7 @@
           el.style.cssText = 'display:block;height:100%';
           wrap.appendChild(el);
           host.appendChild(wrap);
-          mount(opts.componentName, el, opts.windowConfig);
+          mount(opts.componentName, el, opts.windowConfig, opts.customParam || {});
           return 'preview';
         },
       },
@@ -137,15 +157,19 @@
       if (!customElements.get(`gately-widget-${name}`)) customElements.define(`gately-widget-${name}`, cfg.component);
     });
 
-    function mount(componentName, host, windowConfig) {
+    function mount(componentName, host, windowConfig, customParam = {}) {
       const cfg = pkg.components.pages[componentName];
       if (!cfg) return null;
       const el = document.createElement(`gately-page-${componentName}`);
       el.style.display = 'block';
       el.style.height = '100%';
-      el.spCtx = ctx({ background: cfg.background, widgetInfo: { widgetId: componentName, config: {}, gridSize: '1x1', title: '' }, customParam: {} });
+      el.spCtx = ctx({
+        background: cfg.background,
+        widgetInfo: { widgetId: customParam.widgetId || '', config: {}, gridSize: '1x1', title: '' },
+        customParam,
+      });
       host.appendChild(el);
-      el.onInitialized?.({ customParam: {} });
+      el.onInitialized?.({ customParam, widgetInfo: { widgetId: customParam.widgetId || '' } });
       window.__last = el;
       return el;
     }
@@ -257,18 +281,26 @@
       const bar = document.querySelector('.bar');
       bar.style.display = 'none';
       const hp = Number(new URLSearchParams(location.search).get('h')) || (panel === 'config' ? 760 : 760);
+      // ?srv=0|1|2 预览演示清单里的某一台
+      const srvIdx = Math.min(SERVERS.length - 1, Math.max(0, Number(new URLSearchParams(location.search).get('srv')) || 0));
       api.window.open({
         componentName: panel === 'config' ? 'gately-config' : 'gately-main',
+        customParam: panel === 'config'
+          ? { widgetId: 'w0', serverId: SERVERS[srvIdx].id }
+          : { serverId: SERVERS[srvIdx].id },
         windowConfig: panel === 'config' ? { width: 760, height: hp } : { width: 1120, height: hp },
       });
       const tab = new URLSearchParams(location.search).get('tab');
       if (tab && window.__last) window.__last.tab = tab;
+      // ?range=30|60|120 预览趋势窗口
+      const range = Number(new URLSearchParams(location.search).get('range'));
+      if (range && window.__last) window.__last.range = range;
     }
 
     // 预灌几轮采样，卡片上的趋势曲线才有形状可看
     (async () => {
       for (let i = 0; i < 12; i += 1) {
-        await gateway.refresh();
+        await Promise.all(gateway.all().map((st) => st.refresh()));
         await new Promise((r) => setTimeout(r, 60));
       }
     })();

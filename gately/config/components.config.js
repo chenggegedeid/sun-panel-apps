@@ -17,7 +17,8 @@ export default {
       headerTextColor: '#15171a',
       headerTextColorDark: '#f2f2f7',
       width: 760,
-      height: 760,
+      // 多台服务器后设置页变长，给高一点，少滚动
+      height: 820,
       resize: true,
     },
 

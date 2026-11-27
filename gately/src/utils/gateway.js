@@ -1,8 +1,14 @@
 /**
- * 网关状态单例
+ * 网关状态仓库：一台服务器一份
  *
- * 一个导航页上可能同时摆着好几个尺寸的卡片，主窗口也读同一份数据，
- * 所以轮询放在这里统一做：同一时刻只发一轮请求，订阅者各自渲染。
+ * 导航页上可能同时摆着好几张卡片，每张盯着不同的机器；主窗口顶部也能切换。
+ * 所以轮询按实例分开：每台自己的快照、自己的趋势采样、自己的定时器，
+ * 同一实例被多张卡片引用时只发一轮请求（引用计数）。
+ *
+ * 对外通过 hub 取：
+ *   gateway.sync(servers, { interval, defaultId })   同步清单
+ *   gateway.get(id)                                  取某台的 store
+ *   gateway.list()                                   当前清单
  */
 
 import { createClient, GatelyError, normalizeHost } from './api.js';
@@ -163,50 +169,75 @@ function derive({ status, topo, guard }) {
   return snap;
 }
 
-class GatewayStore {
-  constructor() {
-    this.conn = { host: '', token: '', interval: DEFAULT_INTERVAL };
+/** 一台服务器的状态与轮询 */
+export class GatewayStore {
+  /**
+   * @param {{id:string,name?:string,host:string,token:string}} server
+   * @param {() => any} getTimerApi 取宿主定时器
+   */
+  constructor(server, getTimerApi) {
+    this.server = { id: '', name: '', host: '', token: '', ...server };
+    this._getTimerApi = getTimerApi;
+    this.interval = DEFAULT_INTERVAL;
     this.snap = emptySnap();
     this.subs = new Set();
     this.refs = 0;
     this.timer = null;
-    this.timerApi = null;
     this.inflight = null;
     this._lastAt = 0;
     // 卡片上的趋势曲线靠这里累积：每次轮询压一个点，最多留 120 个
     this.hist = [];
+    // 全站趋势按 minutes 缓存，避免主窗口和卡片各拉一遍
+    this._trendCache = {};
   }
 
-  /** 宿主提供的定时器（api.timer），没有就用原生 */
-  setTimerApi(timerApi) {
-    this.timerApi = timerApi || null;
+  get id() {
+    return this.server.id;
   }
 
-  configure({ host, token, interval } = {}) {
-    const next = {
-      host: String(host ?? this.conn.host ?? '').trim(),
-      token: String(token ?? this.conn.token ?? '').trim(),
-      interval: Math.min(300, Math.max(5, Number(interval ?? this.conn.interval) || DEFAULT_INTERVAL)),
-    };
-    const changed = next.host !== this.conn.host || next.token !== this.conn.token;
-    const intervalChanged = next.interval !== this.conn.interval;
-    this.conn = next;
-    if (changed) {
-      this.snap = emptySnap();
-      this.hist = [];
-      this.refresh();
-    } else if (intervalChanged && this.refs > 0) {
-      this._startTimer();
-    }
-    return this.conn;
+  get name() {
+    return this.server.name;
+  }
+
+  get host() {
+    return this.server.host;
   }
 
   get configured() {
-    return !!normalizeHost(this.conn.host) && !!this.conn.token;
+    return !!normalizeHost(this.server.host) && !!this.server.token;
   }
 
   client() {
-    return createClient(this.conn);
+    return createClient(this.server);
+  }
+
+  /** 换地址或令牌时把旧数据清干净，避免拿上一台的数字冒充新的 */
+  setServer(server) {
+    const next = { ...this.server, ...server };
+    const changed = next.host !== this.server.host || next.token !== this.server.token;
+    const renamed = next.name !== this.server.name;
+    this.server = next;
+    if (changed) {
+      this.snap = emptySnap();
+      this.hist = [];
+      this._trendCache = {};
+      if (this.refs > 0) {
+        this.refresh();
+        this._startTimer();
+      }
+    } else if (renamed) {
+      // 只是改了名字：数据不变，但卡片标题要跟着换
+      this._emit();
+    }
+    return this;
+  }
+
+  setInterval(sec) {
+    const next = Math.min(300, Math.max(5, Number(sec) || DEFAULT_INTERVAL));
+    if (next === this.interval) return this;
+    this.interval = next;
+    if (this.refs > 0) this._startTimer();
+    return this;
   }
 
   subscribe(fn) {
@@ -230,8 +261,10 @@ class GatewayStore {
   attach() {
     this.refs += 1;
     if (this.refs === 1) {
-      this.refresh();
-      this._startTimer();
+      if (this.configured) {
+        this.refresh();
+        this._startTimer();
+      }
     }
     return () => {
       this.refs = Math.max(0, this.refs - 1);
@@ -239,18 +272,96 @@ class GatewayStore {
     };
   }
 
+  _timerApi() {
+    return this._getTimerApi?.() || null;
+  }
+
   _startTimer() {
     this._stopTimer();
     if (!this.configured) return;
-    const set = this.timerApi?.setInterval || window.setInterval.bind(window);
-    this.timer = set(() => this.refresh({ quiet: true }), Math.max(5, this.conn.interval) * 1000);
+    const api = this._timerApi();
+    const set = api?.setInterval || window.setInterval.bind(window);
+    this.timer = set(() => this.refresh({ quiet: true }), Math.max(5, this.interval) * 1000);
   }
 
   _stopTimer() {
     if (this.timer == null) return;
-    const clear = this.timerApi?.clearInterval || window.clearInterval.bind(window);
+    const api = this._timerApi();
+    const clear = api?.clearInterval || window.clearInterval.bind(window);
     clear(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * 全站请求趋势（分钟级）
+   *
+   * Gately 没有「全站合计」的历史接口：topology 只带最近 60 秒的秒级曲线，
+   * /api/perf/overview 只有主机指标，能拿到分钟级请求量的只有单站点的
+   * /api/webservice/stats（必须带 listener + site）。所以这里按正在运行的站点
+   * 逐个取回，再按分钟把 requests / bytes / 4xx / 5xx 加总。
+   *
+   * 接口本身就是分钟粒度，缓存 60 秒足够；并发限 6，站点多的实例也不会打满。
+   */
+  async fetchTrend(minutes = 30, { force = false } = {}) {
+    const key = String(minutes);
+    const now = Date.now();
+    const hit = this._trendCache[key];
+    if (!force && hit && now - hit.at < 60000) return hit.value;
+
+    const g = this.snap.gateway;
+    const pairs = (g?.sites || [])
+      .filter((s) => s.running && s.enable && s.listener)
+      .map((s) => ({ listener: s.listener, site: s.key }));
+
+    if (!pairs.length) {
+      // 拓扑还没回来或没有运行中的站点，不缓存，等下一轮
+      return { series: [], ok: 0, fail: 0, total: 0, error: '', at: now };
+    }
+
+    const client = this.client();
+    const buckets = new Map();
+    const queue = pairs.slice();
+    let ok = 0;
+    let fail = 0;
+    let lastErr = '';
+
+    const worker = async () => {
+      for (;;) {
+        const job = queue.shift();
+        if (!job) return;
+        try {
+          const v = await client.stats({ ...job, minutes });
+          ok += 1;
+          (Array.isArray(v?.series) ? v.series : []).forEach((p) => {
+            const t = Number(p?.t) || 0;
+            if (!t) return;
+            const cur = buckets.get(t) || { t, requests: 0, bytes: 0, s4xx: 0, s5xx: 0 };
+            cur.requests += Number(p.requests) || 0;
+            cur.bytes += Number(p.bytes) || 0;
+            cur.s4xx += Number(p.s4xx) || 0;
+            cur.s5xx += Number(p.s5xx) || 0;
+            buckets.set(t, cur);
+          });
+        } catch (e) {
+          fail += 1;
+          lastErr = e instanceof GatelyError ? e.message : String(e?.message || e);
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(6, pairs.length) }, worker));
+
+    const value = {
+      series: [...buckets.values()].sort((a, b) => a.t - b.t),
+      ok,
+      fail,
+      total: pairs.length,
+      // 全部站点都失败才算不可用；个别站点失败不影响合计曲线
+      error: ok ? '' : lastErr,
+      at: Date.now(),
+    };
+    this._trendCache[key] = { at: value.at, value };
+    return value;
   }
 
   async refresh({ quiet = false } = {}) {
@@ -314,5 +425,105 @@ class GatewayStore {
   }
 }
 
-export const gateway = new GatewayStore();
-export { DEFAULT_INTERVAL };
+/** 服务器清册：把清单变成一组 store，地址变了就重建 */
+class GatewayHub {
+  constructor() {
+    this.stores = new Map();
+    this.servers = [];
+    this.defaultId = '';
+    this.interval = DEFAULT_INTERVAL;
+    this.timerApi = null;
+    this.listSubs = new Set();
+  }
+
+  setTimerApi(timerApi) {
+    this.timerApi = timerApi || null;
+  }
+
+  _getTimerApi() {
+    return this.timerApi;
+  }
+
+  /**
+   * 同步服务器清单。
+   * 已经在跑的实例只更新字段，不会重建（否则卡片上的曲线会被清空）。
+   */
+  sync(servers, { interval, defaultId } = {}) {
+    const list = Array.isArray(servers) ? servers : [];
+    this.servers = list;
+    this.interval = Math.min(300, Math.max(5, Number(interval) || DEFAULT_INTERVAL));
+    const ids = new Set(list.map((s) => s.id));
+
+    // 删掉的实例：停表、断开订阅
+    [...this.stores.keys()].forEach((id) => {
+      if (!ids.has(id)) {
+        const st = this.stores.get(id);
+        st._stopTimer();
+        this.stores.delete(id);
+      }
+    });
+
+    list.forEach((s) => {
+      let st = this.stores.get(s.id);
+      if (!st) {
+        st = new GatewayStore(s, () => this._getTimerApi());
+        this.stores.set(s.id, st);
+      } else {
+        st.setServer(s);
+      }
+      st.setInterval(this.interval);
+    });
+
+    this.defaultId = this.stores.has(defaultId) ? defaultId : list[0]?.id || '';
+    this._emitList();
+    return this;
+  }
+
+  /** 当前清单（脱敏：不带令牌） */
+  list() {
+    return this.servers.map((s) => ({ id: s.id, name: s.name, host: s.host }));
+  }
+
+  get empty() {
+    return this.stores.size === 0;
+  }
+
+  /** 取某台的 store；id 不在清单里时退回默认那台 */
+  get(id) {
+    if (id && this.stores.has(id)) return this.stores.get(id);
+    if (this.defaultId && this.stores.has(this.defaultId)) return this.stores.get(this.defaultId);
+    return this.stores.values().next().value || null;
+  }
+
+  /** 全部实例（预览页预灌采样用） */
+  all() {
+    return [...this.stores.values()];
+  }
+
+  /** 有没有任何一台配好 */
+  get configured() {
+    for (const st of this.stores.values()) if (st.configured) return true;
+    return false;
+  }
+
+  /** 监听清单变化（主窗口的切换条用） */
+  subscribeList(fn) {
+    this.listSubs.add(fn);
+    fn(this.list());
+    return () => this.listSubs.delete(fn);
+  }
+
+  _emitList() {
+    const l = this.list();
+    this.listSubs.forEach((fn) => {
+      try {
+        fn(l);
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+}
+
+export const gateway = new GatewayHub();
+export { DEFAULT_INTERVAL, emptySnap };

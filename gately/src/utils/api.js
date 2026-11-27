@@ -61,7 +61,7 @@ function mapStatus(status, bodyMsg) {
   }
   if (status === 403) {
     return new GatelyError(
-      bodyMsg || '令牌缺少这项权限，或该功能模块已关闭（关闭时接口返回 403）',
+      bodyMsg || '令牌缺少这项权限、该模块已关闭，或请求被 Gately 的同源校验拦下（关闭时接口返回 403）',
       { status, kind: 'scope' },
     );
   }
@@ -141,8 +141,20 @@ export function createClient(conn) {
     status: () => request('GET', '/api/status'),
     /** Web 服务拓扑快照：监听器、站点、QPS、带宽、上游健康 */
     topology: () => request('GET', '/api/webservice/topology'),
-    /** 站点分钟级统计：状态码分布、拦截原因、前 N 个 IP / 国家 */
-    stats: (minutes = 30) => request('GET', `/api/webservice/stats?minutes=${minutes}`),
+    /**
+     * 单个站点的分钟级统计：请求 / 流量序列、状态码分布、拦截原因、前 N 个 IP / 国家
+     *
+     * 注意 listener 与 site 都是必填：后端按「listener+site」定位运行中的站点处理器，
+     * 少传任何一个都会返回 404「站点不存在或所属监听未运行」。
+     */
+    stats: ({ listener, site, minutes = 30 } = {}) => {
+      const qs = new URLSearchParams({
+        listener: listener || '',
+        site: site || '',
+        minutes: String(minutes),
+      });
+      return request('GET', `/api/webservice/stats?${qs.toString()}`);
+    },
     /** 证书列表（含到期时间、签发者、状态） */
     certs: () => request('GET', '/api/ssl/certs'),
     /** 当前封禁名单 */

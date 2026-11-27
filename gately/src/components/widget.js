@@ -1,8 +1,9 @@
 import { SunPanelWidgetElement } from '@sun-panel/micro-app';
 import { html, svg, css, nothing } from 'lit';
 import { buildTheme, resolveConfig, METRICS } from '../utils/theme.js';
-import { gateway } from '../utils/gateway.js';
+import { gateway, emptySnap } from '../utils/gateway.js';
 import { setRequestAdapter } from '../utils/api.js';
+import { readConfig, readWidgetConfig, serverLabel, CONFIG_EVENT } from '../utils/servers.js';
 import { fmtNum, fmtBps, fmtPct, clamp, niceTop } from '../utils/format.js';
 
 const COLOR = Object.fromEntries(METRICS.map((m) => [m.key, m.color]));
@@ -17,7 +18,11 @@ export class GatelyWidget extends SunPanelWidgetElement {
 
   constructor() {
     super();
-    this.snap = gateway.snap;
+    this.snap = emptySnap();
+    this.store = null;
+    // 这张卡片盯哪台机器（设置里选的），空则跟随默认
+    this.serverId = '';
+    this.serverName = '';
     this.settings = null;
     this.ready = false;
     this._unsub = null;
@@ -28,6 +33,10 @@ export class GatelyWidget extends SunPanelWidgetElement {
     return resolveConfig({ ...(this.settings || {}), ...(this.spCtx?.widgetInfo?.config || {}) });
   }
 
+  get widgetId() {
+    return this.spCtx?.widgetInfo?.widgetId || '';
+  }
+
   _bindNetwork() {
     const net = this.spCtx?.api?.network;
     if (net?.request) setRequestAdapter((opts) => net.request(opts));
@@ -36,12 +45,14 @@ export class GatelyWidget extends SunPanelWidgetElement {
 
   onInitialized() {
     this._bindNetwork();
-    this._unsub = gateway.subscribe((snap) => {
-      this.snap = snap;
-      this.requestUpdate();
-    });
-    this._detach = gateway.attach();
     this._load();
+    // 设置页保存后会广播，卡片自己重读一遍绑定关系
+    this._onSaved = () => this._load();
+    try {
+      window.addEventListener(CONFIG_EVENT, this._onSaved);
+    } catch {
+      /* 非浏览器环境 */
+    }
   }
 
   onWidgetInfoChanged() {
@@ -54,23 +65,57 @@ export class GatelyWidget extends SunPanelWidgetElement {
     this._unsub = null;
     this._detach?.();
     this._detach = null;
+    try {
+      window.removeEventListener(CONFIG_EVENT, this._onSaved);
+    } catch {
+      /* ignore */
+    }
   }
 
+  /**
+   * 读配置 → 绑定到这台服务器 → 订阅它的快照。
+   * 每次 widgetInfo 变化都会重跑（卡片设置里改了它看哪台机器）。
+   */
   async _load() {
+    const dn = this.spCtx?.api?.dataNode?.user;
     try {
-      const dn = this.spCtx?.api?.dataNode?.user;
-      const [conn, settings] = await Promise.all([
-        dn?.getByKey('gately', 'conn'),
-        dn?.getByKey('gately', 'settings'),
+      const [conf, mine] = await Promise.all([
+        readConfig(dn),
+        readWidgetConfig(dn, this.widgetId),
       ]);
-      if (conn) {
-        gateway.configure({
-          host: conn.host,
-          token: conn.token,
-          interval: settings?.refresh ?? conn.interval,
-        });
+      gateway.sync(conf.servers, {
+        interval: conf.settings?.refresh,
+        defaultId: conf.defaultId,
+      });
+      if (conf.settings) this.settings = conf.settings;
+
+      const want = String(mine?.serverId || '').trim();
+      const store = gateway.get(want);
+      const nextId = store?.id || '';
+      if (nextId !== this.serverId || store !== this.store) {
+        this._unsub?.();
+        this._unsub = null;
+        this._detach?.();
+        this._detach = null;
+
+        this.serverId = nextId;
+        this.store = store;
+        // 标题优先用用户在设置里起的名字，不拿主机名冒充
+        this.serverName = store ? serverLabel(store.server) : '';
+
+        if (store) {
+          this._unsub = store.subscribe((snap) => {
+            this.snap = snap;
+            // 设置里改了名字，下一轮就换过来，不用重开窗口
+            this.serverName = serverLabel(store.server);
+            this.requestUpdate();
+          });
+          this._detach = store.attach();
+          this.snap = store.snap;
+        } else {
+          this.snap = emptySnap();
+        }
       }
-      if (settings) this.settings = settings;
     } catch {
       /* 没存过配置就走空状态 */
     }
@@ -83,18 +128,20 @@ export class GatelyWidget extends SunPanelWidgetElement {
     this.spCtx?.api?.window?.open?.({
       componentName: 'gately-config',
       title: 'Gately 设置',
-      windowConfig: { width: 760, height: 760, resize: true },
+      customParam: { widgetId: this.widgetId, serverId: this.serverId },
+      windowConfig: { width: 760, height: 820, resize: true },
     });
   }
 
   _openMain() {
-    if (!gateway.configured) {
+    if (!this.store?.configured) {
       this._openConfig();
       return;
     }
     this.spCtx?.api?.window?.open?.({
       componentName: 'gately-main',
-      title: this.cfg.title || this.snap.hostname || 'Gately 网关',
+      title: this.serverName || this.cfg.title || 'Gately 网关',
+      customParam: { serverId: this.serverId },
       windowConfig: { width: 1120, height: 760, resize: true },
     });
   }
@@ -133,12 +180,15 @@ export class GatelyWidget extends SunPanelWidgetElement {
   }
 
   _title() {
-    return this.cfg.title || this.snap.hostname || 'Gately';
+    // 名字最能区分机器：三台都叫 debian 时，主机名帮不上忙。
+    // 全局「标题」只在单台时需要（多台会所有卡同名），所以多台时忽略它
+    const single = (gateway.servers?.length || 0) <= 1;
+    return (single && this.cfg.title) || this.serverName || this.snap.hostname || 'Gately';
   }
 
   _status() {
     const p = this.snap.phase;
-    if (!gateway.configured) return { cls: 'idle', text: '未配置' };
+    if (!this.store?.configured) return { cls: 'idle', text: '未配置' };
     if (p === 'error') return { cls: 'err', text: '连接失败' };
     if (p === 'loading' && !this.snap.ts) return { cls: 'idle', text: '连接中' };
     const g = this.snap.gateway;
@@ -372,7 +422,7 @@ export class GatelyWidget extends SunPanelWidgetElement {
     let body;
     if (!this.ready) {
       body = html`<div class="empty"><span class="etitle">载入中…</span></div>`;
-    } else if (!gateway.configured) {
+    } else if (!this.store?.configured) {
       body = this._empty();
     } else if (this.snap.phase === 'error' && !this.snap.ts) {
       body = this._errHint();
@@ -421,7 +471,12 @@ export class GatelyWidget extends SunPanelWidgetElement {
       padding: 8px 11px;
     }
     .size-2x1 .chip {
-      min-height: 42px;
+      min-height: 0;
+    }
+    /* 2x1 只有两块，让它们把 116 的高度吃满，别挤在上半截 */
+    .size-2x1 .chips {
+      flex: 1 1 auto;
+      min-height: 0;
     }
     .size-1x2 .chip {
       min-height: 32px;
@@ -429,6 +484,12 @@ export class GatelyWidget extends SunPanelWidgetElement {
     }
     .size-1x2 .spark {
       min-height: 40px;
+      /* 曲线吃掉剩余高度，底部就不会空一截 */
+      flex: 1 1 auto;
+    }
+    .size-1x2 .minilist {
+      flex: none;
+      margin-top: auto;
     }
     .size-4x4 .spark {
       min-height: 150px;

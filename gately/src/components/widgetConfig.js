@@ -2,7 +2,11 @@ import { SunPanelPageElement } from '@sun-panel/micro-app';
 import { html, css } from 'lit';
 import { resolveConfig, METRICS, DEFAULT_CONFIG } from '../utils/theme.js';
 import { gateway } from '../utils/gateway.js';
-import { setRequestAdapter, createClient, normalizeHost } from '../utils/api.js';
+import { setRequestAdapter, createClient, normalizeHost, hostOf } from '../utils/api.js';
+import {
+  readConfig, writeServers, writeWidgetConfig, normalizeServers, newId, serverLabel, emitConfigSaved,
+  KEY_SETTINGS, NODE,
+} from '../utils/servers.js';
 
 const PROBES = [
   { key: 'status', label: '系统状态 status:read', run: (c) => c.status() },
@@ -13,10 +17,14 @@ const PROBES = [
   { key: 'logs', label: '系统日志 logs:read', run: (c) => c.logs(1) },
 ];
 
+const MAX_SERVERS = 8;
+
 export class GatelyConfig extends SunPanelPageElement {
   static properties = {
-    host: { state: true },
-    token: { state: true },
+    servers: { state: true },
+    widgetId: { state: true },
+    cardServerId: { state: true },
+    defaultServerId: { state: true },
     interval: { state: true },
     title: { state: true },
     metrics: { state: true },
@@ -28,18 +36,25 @@ export class GatelyConfig extends SunPanelPageElement {
     textMode: { state: true },
     textColor: { state: true },
     accent: { state: true },
-    probing: { state: true },
-    probes: { state: true },
     message: { state: true },
     msgKind: { state: true },
     dark: { state: true },
-    showToken: { state: true },
+    migrated: { state: true },
+    tests: { state: true },
+    tokenOpen: { state: true },
+    pendingDel: { state: true },
   };
 
   constructor() {
     super();
-    this.host = '';
-    this.token = '';
+    this.servers = [];
+    // 每台的测试状态：id -> { busy, ok, text, probes }
+    this.tests = {};
+    // 令牌明文显示的 id 集合
+    this.tokenOpen = {};
+    this.widgetId = '';
+    this.cardServerId = '';
+    this.defaultServerId = '';
     this.interval = DEFAULT_CONFIG.refresh;
     this.title = '';
     this.metrics = DEFAULT_CONFIG.metrics.slice();
@@ -51,12 +66,11 @@ export class GatelyConfig extends SunPanelPageElement {
     this.textMode = DEFAULT_CONFIG.textMode;
     this.textColor = DEFAULT_CONFIG.textColor;
     this.accent = DEFAULT_CONFIG.accent;
-    this.probing = false;
-    this.probes = [];
     this.message = '';
     this.msgKind = '';
     this.dark = false;
-    this.showToken = false;
+    this.migrated = false;
+    this.pendingDel = '';
   }
 
   _bindNetwork() {
@@ -64,22 +78,22 @@ export class GatelyConfig extends SunPanelPageElement {
     if (net?.request) setRequestAdapter((opts) => net.request(opts));
   }
 
-  async onInitialized() {
+  async onInitialized(param) {
     this._bindNetwork();
     this.dark = !!this.spCtx?.darkMode;
+    // 从某张卡片点「设置」进来时，带上它是哪一张、当前看哪台
+    const cp = param?.customParam || {};
+    this.widgetId = String(cp.widgetId || param?.widgetInfo?.widgetId || '');
+    this.cardServerId = String(cp.serverId || '');
+
+    const dn = this.spCtx?.api?.dataNode?.user;
     try {
-      const dn = this.spCtx?.api?.dataNode?.user;
-      const [conn, settings] = await Promise.all([
-        dn?.getByKey('gately', 'conn'),
-        dn?.getByKey('gately', 'settings'),
-      ]);
-      if (conn) {
-        this.host = conn.host || '';
-        this.token = conn.token || '';
-        this.interval = Number(conn.interval) || DEFAULT_CONFIG.refresh;
-      }
-      if (settings) {
-        const c = resolveConfig(settings);
+      const conf = await readConfig(dn);
+      this.servers = conf.servers.length ? conf.servers.map((s) => ({ ...s })) : [];
+      this.migrated = conf.migrated;
+      this.defaultServerId = conf.defaultId;
+      if (conf.settings) {
+        const c = resolveConfig(conf.settings);
         this.title = c.title || '';
         this.metrics = c.metrics.slice();
         this.trend = c.trend;
@@ -92,74 +106,108 @@ export class GatelyConfig extends SunPanelPageElement {
         this.accent = c.accent;
         this.interval = c.refresh;
       }
+      if (this.widgetId) {
+        const mine = await dn?.getByKey?.(NODE, `widget:${this.widgetId}`);
+        if (mine?.serverId) this.cardServerId = String(mine.serverId);
+      }
     } catch {
       /* 首次使用，用默认值 */
     }
   }
 
-  // ---------- 指标排序 ----------
-  _toggleMetric(key) {
-    const on = this.metrics.includes(key);
-    this.metrics = on ? this.metrics.filter((k) => k !== key) : [...this.metrics, key];
-    if (!this.metrics.length) this.metrics = [key];
+  // ---------- 服务器清单 ----------
+  _addServer() {
+    if (this.servers.length >= MAX_SERVERS) {
+      this._say(`最多添加 ${MAX_SERVERS} 台，够用了`, 'err');
+      return;
+    }
+    const s = { id: newId(), name: '', host: '', token: '' };
+    this.servers = [...this.servers, s];
+    if (!this.defaultServerId) this.defaultServerId = s.id;
+    if (!this.cardServerId) this.cardServerId = s.id;
+    // 新行聚焦到地址输入
+    this.updateComplete.then(() => {
+      const el = this.renderRoot?.querySelector?.(`[data-host="${s.id}"]`);
+      el?.focus?.();
+    });
   }
 
-  _move(key, dir) {
-    const list = this.metrics.slice();
-    const i = list.indexOf(key);
-    const j = i + dir;
-    if (i < 0 || j < 0 || j >= list.length) return;
-    [list[i], list[j]] = [list[j], list[i]];
-    this.metrics = list;
+  /**
+   * 删除一台。
+   * 面板窗口里 confirm() 常被拦掉，点了像没反应，所以改成行内二次确认：
+   * 第一次点变成「确认移除」，再点才真删，3 秒不点自动收回。
+   */
+  _removeServer(id) {
+    if (this.pendingDel === id) {
+      this.pendingDel = '';
+      this.servers = this.servers.filter((x) => x.id !== id);
+      delete this.tests[id];
+      this.tests = { ...this.tests };
+      if (this.defaultServerId === id) this.defaultServerId = this.servers[0]?.id || '';
+      if (this.cardServerId === id) this.cardServerId = '';
+      this._say('已从清单移除，点保存后生效', 'ok');
+      return;
+    }
+    this.pendingDel = id;
+    if (this._delTimer) clearTimeout(this._delTimer);
+    this._delTimer = setTimeout(() => {
+      this.pendingDel = '';
+    }, 3000);
+  }
+
+  _patch(id, patch) {
+    this.servers = this.servers.map((s) => (s.id === id ? { ...s, ...patch } : s));
+  }
+
+  _toggleToken(id) {
+    this.tokenOpen = { ...this.tokenOpen, [id]: !this.tokenOpen[id] };
+  }
+
+  _defaultLabel(s) {
+    return String(s.name || '').trim() || hostOf(s.host) || '新服务器';
   }
 
   // ---------- 测试连接 ----------
-  async _test() {
-    const host = normalizeHost(this.host);
+  async _test(server) {
+    const host = normalizeHost(server.host);
+    const id = server.id;
+    const set = (patch) => {
+      this.tests = { ...this.tests, [id]: { ...(this.tests[id] || {}), ...patch } };
+    };
     if (!host) {
-      this._say('先填管理地址，例如 http://192.168.1.10:16680', 'err');
+      set({ busy: false, ok: false, text: '先填管理地址', probes: [] });
       return;
     }
-    if (!this.token.trim()) {
-      this._say('先填 API 令牌（Gately 后台 → API 令牌，令牌以 gtl_ 开头）', 'err');
+    if (!String(server.token || '').trim()) {
+      set({ busy: false, ok: false, text: '先填 API 令牌', probes: [] });
       return;
     }
-    this.probing = true;
-    this.probes = [];
-    this.message = '';
-    const client = createClient({ host, token: this.token });
+    set({ busy: true, ok: null, text: '正在连接…', probes: [] });
+    const client = createClient({ host, token: server.token });
+    let status;
     try {
-      const status = await client.status();
-      this.probes = [
-        { key: 'status', label: '系统状态 status:read', ok: true, note: status?.version || '' },
-        { key: 'web', label: '站点与拓扑 webservice:read', ok: null },
-        { key: 'guard', label: '封禁与防护 guard:read', ok: null },
-        { key: 'ssl', label: '证书 ssl:read', ok: null },
-        { key: 'ddns', label: '动态域名 ddns:read', ok: null },
-        { key: 'logs', label: '系统日志 logs:read', ok: null },
-      ];
-      const host0 = status?.host?.hostname || '';
-      this._say(`连接成功：${status?.version || '未知版本'}${host0 ? ` · ${host0}` : ''}`, 'ok');
-
-      for (const p of PROBES.slice(1)) {
-        try {
-          await p.run(client);
-          const row = this.probes.find((r) => r.key === p.key);
-          if (row) row.ok = true;
-        } catch (e) {
-          const row = this.probes.find((r) => r.key === p.key);
-          if (row) {
-            row.ok = false;
-            row.note = e?.message || '失败';
-          }
-        }
-        this.probes = this.probes.slice();
-      }
+      status = await client.status();
     } catch (e) {
-      this.probes = [];
-      this._say(e?.message || '连接失败', 'err');
-    } finally {
-      this.probing = false;
+      set({ busy: false, ok: false, text: e?.message || '连接失败', probes: [] });
+      return;
+    }
+    const hostname = status?.host?.hostname || '';
+    set({
+      busy: false,
+      ok: true,
+      text: `连接成功：${status?.version || '未知版本'}${hostname ? ` · 主机名 ${hostname}` : ''}`,
+      probes: [{ key: 'status', label: PROBES[0].label, ok: true, note: status?.version || '' }],
+    });
+    for (const p of PROBES.slice(1)) {
+      const cur = this.tests[id];
+      try {
+        await p.run(client);
+        set({ probes: [...(cur?.probes || []), { key: p.key, label: p.label, ok: true }] });
+      } catch (e) {
+        set({
+          probes: [...(cur?.probes || []), { key: p.key, label: p.label, ok: false, note: e?.message || '失败' }],
+        });
+      }
     }
   }
 
@@ -170,17 +218,24 @@ export class GatelyConfig extends SunPanelPageElement {
 
   // ---------- 保存 ----------
   async _save() {
-    const host = normalizeHost(this.host);
-    const token = this.token.trim();
-    if (!host) {
-      this._say('管理地址不能为空', 'err');
+    const list = normalizeServers(
+      this.servers.map((s) => ({
+        ...s,
+        name: String(s.name || '').trim() || hostOf(s.host),
+      })),
+    );
+    // 两台填了同一个地址会被合并，得说清楚，否则用户以为少了一台
+    const merged = this.servers.filter((s) => normalizeHost(s.host)).length - list.length;
+    if (!list.length) {
+      this._say('至少填一台 Gately 的地址与令牌', 'err');
       return;
     }
-    if (!token) {
-      this._say('API 令牌不能为空', 'err');
+    const missing = list.find((s) => !s.token);
+    if (missing) {
+      this._say(`「${serverLabel(missing)}」还没填 API 令牌`, 'err');
       return;
     }
-    const conn = { host, token, interval: Number(this.interval) || 15 };
+    const defaultId = list.some((s) => s.id === this.defaultServerId) ? this.defaultServerId : list[0].id;
     const settings = {
       title: this.title.trim(),
       metrics: this.metrics.slice(),
@@ -193,12 +248,30 @@ export class GatelyConfig extends SunPanelPageElement {
       textColor: this.textColor,
       accent: this.accent,
       refresh: Number(this.interval) || 15,
+      defaultServerId: defaultId,
     };
     try {
       const dn = this.spCtx?.api?.dataNode?.user;
-      await dn?.setByKeys('gately', { conn, settings });
-      gateway.configure({ host, token, interval: conn.interval });
-      this._say('已保存，卡片会立刻按新地址刷新', 'ok');
+      await writeServers(dn, list);
+      await dn?.setByKey?.(NODE, KEY_SETTINGS, settings);
+      if (this.widgetId) {
+        // 卡片绑的那台被删了就退回「跟随默认」，别留一个指向空气的 id
+        const cardId = list.some((s) => s.id === this.cardServerId) ? String(this.cardServerId) : '';
+        await writeWidgetConfig(dn, this.widgetId, { serverId: cardId });
+        this.cardServerId = cardId;
+      }
+      // 立刻反映到卡片，不用等下次打开
+      gateway.sync(list, { interval: settings.refresh, defaultId });
+      this.servers = list.map((s) => ({ ...s }));
+      this.defaultServerId = defaultId;
+      this.migrated = false;
+      emitConfigSaved({ widgetId: this.widgetId });
+      this._say(
+        merged > 0
+          ? `已保存 ${list.length} 台（${merged} 台地址重复，已合并）`
+          : `已保存 ${list.length} 台，卡片会立刻按新配置刷新`,
+        'ok',
+      );
     } catch (e) {
       this._say(`保存失败：${e?.message || e}`, 'err');
     }
@@ -236,6 +309,82 @@ export class GatelyConfig extends SunPanelPageElement {
     </div>`;
   }
 
+  /** 一台服务器的编辑块 */
+  _serverRow(s, idx) {
+    const t = this.tests[s.id];
+    const open = !!this.tokenOpen[s.id];
+    const isDefault = this.defaultServerId === s.id;
+    return html`
+      <div class="srv">
+        <div class="srv-head">
+          <span class="srv-no">${idx + 1}</span>
+          <input
+            class="inp name"
+            .value=${s.name}
+            placeholder=${hostOf(s.host) || '给这台起个名字，如「家里 NAS」'}
+            @input=${(e) => this._patch(s.id, { name: e.target.value })}
+          />
+          <button
+            class="ghost small ${isDefault ? 'on' : ''}"
+            title="主窗口默认打开这台"
+            @click=${() => {
+    this.defaultServerId = s.id;
+    this._say(`默认打开「${this._defaultLabel(s)}」`, 'ok');
+  }}
+          >
+            ${isDefault ? '默认' : '设为默认'}
+          </button>
+          <button
+            class="ghost small ${this.pendingDel === s.id ? 'danger' : ''}"
+            @click=${() => this._removeServer(s.id)}
+          >
+            ${this.pendingDel === s.id ? '确认移除' : '移除'}
+          </button>
+        </div>
+        <div class="srv-line">
+          <input
+            class="inp"
+            data-host=${s.id}
+            .value=${s.host}
+            placeholder="http://192.168.1.10:16680"
+            @input=${(e) => this._patch(s.id, { host: e.target.value })}
+          />
+        </div>
+        <div class="srv-line">
+          <input
+            class="inp"
+            type=${open ? 'text' : 'password'}
+            .value=${s.token}
+            placeholder="gtl_xxxxxxxx"
+            @input=${(e) => this._patch(s.id, { token: e.target.value })}
+          />
+          <button class="ghost small" @click=${() => this._toggleToken(s.id)}>${open ? '隐藏' : '显示'}</button>
+          <button class="ghost small" @click=${() => this._test(s)} ?disabled=${t?.busy}>
+            ${t?.busy ? '测试中…' : '测试'}
+          </button>
+        </div>
+        ${t
+    ? html`<div class="tres ${t.ok === true ? 'ok' : t.ok === false ? 'no' : 'wait'}">
+              <i></i><span>${t.text}</span>
+              ${t.probes?.length > 1
+    ? html`<em>权限 ${t.probes.filter((p) => p.ok).length}/${PROBES.length}</em>`
+    : ''}
+            </div>
+            ${t.probes?.length
+    ? html`<div class="probes">
+                  ${t.probes.map(
+    (p) => html`<div class="probe ${p.ok ? 'ok' : 'no'}">
+                      <i></i><span>${p.label}</span>
+                      <em>${p.ok ? '可用' : p.note || '无权限'}</em>
+                    </div>`,
+  )}
+                </div>`
+    : ''}`
+    : ''}
+      </div>
+    `;
+  }
+
   render() {
     const metricRows = METRICS.map((m) => {
       const idx = this.metrics.indexOf(m.key);
@@ -253,13 +402,18 @@ export class GatelyConfig extends SunPanelPageElement {
       </div>`;
     });
 
+    const cardOptions = this.servers.map((s) => ({
+      id: s.id,
+      label: this._defaultLabel(s),
+    }));
+
     return html`
       <div class="wrap ${this.dark ? 'dark' : ''}">
         <div class="head">
           <div>
             <h1>Gately 设置</h1>
             <p>
-              填 Gately 后台的管理地址与 API 令牌。令牌在「设置 → API 令牌」页创建，勾选
+              可以加多台 Gately，每张卡片各盯一台。令牌在 Gately 后台「设置 → API 令牌」页创建，勾选
               <code>status:read</code>、<code>webservice:read</code>、<code>guard:read</code> 等读权限；
               要启停站点、封禁 IP 还需要对应的 <code>:write</code>。
             </p>
@@ -267,66 +421,50 @@ export class GatelyConfig extends SunPanelPageElement {
           <button class="ghost" @click=${() => this._reset()}>复位外观</button>
         </div>
 
-        <div class="card">
-          <div class="card-head"><h2>连接</h2><span class="hint">令牌只存在你自己的面板里</span></div>
-          ${this._field(
-    '管理地址',
-    html`<input
-              class="inp"
-              .value=${this.host}
-              placeholder="http://192.168.1.10:16680"
-              @input=${(e) => (this.host = e.target.value)}
-            />`,
-    '默认管理端口 16680。经 fnOS 网关或反代挂在子路径时，把路径一起写上，例如 https://nas.example.com/app/gately',
-  )}
-          ${this._field(
-    'API 令牌',
-    html`<div class="row">
-              <input
-                class="inp"
-                type=${this.showToken ? 'text' : 'password'}
-                .value=${this.token}
-                placeholder="gtl_xxxxxxxx"
-                @input=${(e) => (this.token = e.target.value)}
-              />
-              <button class="ghost small" @click=${() => (this.showToken = !this.showToken)}>
-                ${this.showToken ? '隐藏' : '显示'}
-              </button>
-            </div>`,
-    '只读监控只要 status:read + webservice:read + guard:read；不要再套一层账号密码，令牌本身就是凭证',
-  )}
-          <div class="row end">
-            <button class="primary" @click=${() => this._test()} ?disabled=${this.probing}>
-              ${this.probing ? '测试中…' : '测试连接'}
-            </button>
-            <span class="msg ${this.msgKind}">${this.message}</span>
-          </div>
-          ${this.probes.length
-    ? html`<div class="probes">
-                ${this.probes.map(
-    (p) => html`<div class="probe ${p.ok === true ? 'ok' : p.ok === false ? 'no' : 'wait'}">
-                    <i></i><span>${p.label}</span>
-                    <em>${p.ok === true ? '可用' : p.ok === false ? p.note || '无权限' : '检测中'}</em>
-                  </div>`,
-  )}
-              </div>`
+        ${this.migrated
+    ? html`<div class="note">已从旧版单台配置迁移过来，名字先用了主机名，可以改成更好认的叫法。</div>`
     : ''}
-          ${this._field(
-    '刷新间隔',
-    html`<div class="row">
-              <input
-                class="inp narrow"
-                type="number"
-                min="5"
-                max="300"
-                .value=${this.interval}
-                @input=${(e) => (this.interval = e.target.value)}
-              />
-              <span class="unit">秒</span>
-            </div>`,
-    '卡片按这个间隔取一次状态，最短 5 秒。页面切到后台时不会继续请求',
-  )}
+
+        <div class="card">
+          <div class="card-head">
+            <h2>服务器</h2>
+            <span class="hint">名字随你起，卡片和窗口标题都显示它，不会再是 debian 这种主机名</span>
+          </div>
+          ${this.servers.length
+    ? this.servers.map((s, i) => this._serverRow(s, i))
+    : html`<div class="blank">还没有服务器。点下面的「添加服务器」，填上 Gately 的管理地址和令牌。</div>`}
+          <div class="row end">
+            <button class="ghost" @click=${() => this._addServer()} ?disabled=${this.servers.length >= MAX_SERVERS}>
+              ＋ 添加服务器
+            </button>
+            <span class="hint">${this.servers.length}/${MAX_SERVERS} 台</span>
+          </div>
         </div>
+
+        ${this.widgetId && cardOptions.length > 1
+    ? html`<div class="card">
+            <div class="card-head">
+              <h2>这张卡片</h2>
+              <span class="hint">导航页上这一张盯哪台；其它卡片各选各的，互不影响</span>
+            </div>
+            ${this._field(
+    '显示哪台服务器',
+    html`<select
+                class="inp"
+                .value=${this.cardServerId}
+                @change=${(e) => (this.cardServerId = e.target.value)}
+              >
+                <option value="" ?selected=${!this.cardServerId}>
+                  跟随默认（${this._defaultLabel(this.servers.find((s) => s.id === this.defaultServerId) || {})}）
+                </option>
+                ${cardOptions.map(
+    (o) => html`<option value=${o.id} ?selected=${o.id === this.cardServerId}>${o.label}</option>`,
+  )}
+              </select>`,
+    '同一台机器摆两张卡也可以，比如一张只看 CPU、一张只看请求',
+  )}
+          </div>`
+    : ''}
 
         <div class="card">
           <div class="card-head">
@@ -338,9 +476,10 @@ export class GatelyConfig extends SunPanelPageElement {
     html`<input
               class="inp"
               .value=${this.title}
-              placeholder=${'留空则用主机名'}
+              placeholder="留空则用服务器名字"
               @input=${(e) => (this.title = e.target.value)}
             />`,
+    '只在单台时生效；加了多台就各自显示服务器名字，否则所有卡片会同名',
   )}
           <div class="metrics">${metricRows}</div>
           ${this._field(
@@ -356,6 +495,21 @@ export class GatelyConfig extends SunPanelPageElement {
       (v) => (this.trend = v),
     ),
     '曲线是面板自己按刷新间隔累积的采样，刚装上是空的，跑几分钟才有形状',
+  )}
+          ${this._field(
+    '刷新间隔',
+    html`<div class="row">
+              <input
+                class="inp narrow"
+                type="number"
+                min="5"
+                max="300"
+                .value=${this.interval}
+                @input=${(e) => (this.interval = e.target.value)}
+              />
+              <span class="unit">秒</span>
+            </div>`,
+    '每台都按这个间隔取状态，最短 5 秒。页面切到后台时不会继续请求',
   )}
         </div>
 
@@ -436,10 +590,26 @@ export class GatelyConfig extends SunPanelPageElement {
 
         <div class="foot">
           <button class="primary big" @click=${() => this._save()}>保存</button>
-          <span class="hint">保存后卡片与主窗口都会用新配置</span>
+          <span class="hint ${this.msgKind}">${this.message || '保存后卡片与主窗口都会用新配置'}</span>
         </div>
       </div>
     `;
+  }
+
+  // ---------- 指标排序 ----------
+  _toggleMetric(key) {
+    const on = this.metrics.includes(key);
+    this.metrics = on ? this.metrics.filter((k) => k !== key) : [...this.metrics, key];
+    if (!this.metrics.length) this.metrics = [key];
+  }
+
+  _move(key, dir) {
+    const list = this.metrics.slice();
+    const i = list.indexOf(key);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    this.metrics = list;
   }
 
   static styles = css`
@@ -495,6 +665,21 @@ export class GatelyConfig extends SunPanelPageElement {
       background: rgba(52, 211, 153, 0.16);
       color: #6ee7b7;
     }
+    .note {
+      margin-bottom: 12px;
+      padding: 9px 12px;
+      border-radius: 10px;
+      font-size: 11.5px;
+      line-height: 1.6;
+      background: rgba(24, 168, 136, 0.1);
+      color: #0d7a64;
+      border: 1px solid rgba(24, 168, 136, 0.18);
+    }
+    .dark .note {
+      background: rgba(52, 211, 153, 0.1);
+      color: #6ee7b7;
+      border-color: rgba(52, 211, 153, 0.2);
+    }
     .card {
       background: rgba(255, 255, 255, 0.74);
       border: 1px solid rgba(0, 0, 0, 0.07);
@@ -526,6 +711,126 @@ export class GatelyConfig extends SunPanelPageElement {
     .dark .hint {
       color: rgba(255, 255, 255, 0.42);
     }
+    .hint.err {
+      color: #e11d48;
+    }
+    .hint.ok {
+      color: #0f9d76;
+    }
+    .blank {
+      padding: 18px 12px;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(0, 0, 0, 0.45);
+      border: 1px dashed rgba(0, 0, 0, 0.12);
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .dark .blank {
+      color: rgba(255, 255, 255, 0.45);
+      border-color: rgba(255, 255, 255, 0.14);
+    }
+
+    /* 服务器行 */
+    .srv {
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 11px;
+      padding: 9px 10px 10px;
+      margin-bottom: 9px;
+      background: rgba(255, 255, 255, 0.6);
+    }
+    .dark .srv {
+      border-color: rgba(255, 255, 255, 0.09);
+      background: rgba(255, 255, 255, 0.035);
+    }
+    .srv-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 7px;
+    }
+    .srv-no {
+      width: 17px;
+      height: 17px;
+      border-radius: 50%;
+      flex: none;
+      font-size: 10.5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(24, 168, 136, 0.14);
+      color: #0d7a64;
+      font-weight: 600;
+    }
+    .dark .srv-no {
+      background: rgba(52, 211, 153, 0.16);
+      color: #6ee7b7;
+    }
+    .srv-head .name {
+      flex: 1 1 auto;
+      width: auto;
+      min-width: 0;
+      font-weight: 600;
+    }
+    .srv-line {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 6px;
+    }
+    .srv-line:last-child {
+      margin-bottom: 0;
+    }
+    .icon {
+      flex: none;
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      background: transparent;
+      color: inherit;
+      opacity: 0.4;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .icon.del:hover {
+      opacity: 1;
+      color: #e11d48;
+      background: rgba(225, 29, 72, 0.1);
+    }
+    .tres {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 7px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .tres i {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex: none;
+      background: #cbd5e1;
+    }
+    .tres.ok {
+      color: #0f9d76;
+    }
+    .tres.ok i {
+      background: #34d399;
+    }
+    .tres.no {
+      color: #e11d48;
+    }
+    .tres.no i {
+      background: #fb7185;
+    }
+    .tres em {
+      margin-left: auto;
+      font-style: normal;
+      opacity: 0.6;
+      flex: none;
+    }
+
     .field {
       display: block;
       margin-bottom: 12px;
@@ -577,6 +882,9 @@ export class GatelyConfig extends SunPanelPageElement {
       flex: none;
       width: 92px;
     }
+    select.inp {
+      padding-right: 6px;
+    }
     .pair {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -590,7 +898,7 @@ export class GatelyConfig extends SunPanelPageElement {
     }
     .row.end {
       justify-content: flex-start;
-      margin: 12px 0 10px;
+      margin: 10px 0 2px;
       gap: 10px;
     }
     .unit {
@@ -639,25 +947,40 @@ export class GatelyConfig extends SunPanelPageElement {
     .dark .ghost {
       border-color: rgba(255, 255, 255, 0.16);
     }
+    .ghost:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
     .ghost.small {
       height: 34px;
       font-size: 11.5px;
       flex: none;
+      padding: 0 10px;
     }
-    .msg {
-      font-size: 11.5px;
-      line-height: 1.5;
+    .ghost.on {
+      border-color: rgba(24, 168, 136, 0.5);
+      color: #0d7a64;
+      background: rgba(24, 168, 136, 0.1);
     }
-    .msg.ok {
-      color: #0f9d76;
+    .dark .ghost.on {
+      color: #6ee7b7;
+      background: rgba(52, 211, 153, 0.14);
     }
-    .msg.err {
+    .ghost.danger {
+      border-color: rgba(225, 29, 72, 0.55);
       color: #e11d48;
+      background: rgba(225, 29, 72, 0.1);
+      font-weight: 600;
+    }
+    .dark .ghost.danger {
+      border-color: rgba(251, 113, 133, 0.6);
+      color: #fda4af;
+      background: rgba(251, 113, 133, 0.14);
     }
     .probes {
-      margin: 8px 0 10px;
+      margin-top: 6px;
       border: 1px solid rgba(0, 0, 0, 0.07);
-      border-radius: 10px;
+      border-radius: 9px;
       overflow: hidden;
     }
     .dark .probes {
@@ -667,8 +990,8 @@ export class GatelyConfig extends SunPanelPageElement {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 10px;
-      font-size: 11.5px;
+      padding: 5px 9px;
+      font-size: 11px;
     }
     .probe + .probe {
       border-top: 1px solid rgba(0, 0, 0, 0.05);
@@ -681,7 +1004,6 @@ export class GatelyConfig extends SunPanelPageElement {
       height: 6px;
       border-radius: 50%;
       flex: none;
-      background: #cbd5e1;
     }
     .probe.ok i {
       background: #34d399;
@@ -692,9 +1014,9 @@ export class GatelyConfig extends SunPanelPageElement {
     .probe em {
       margin-left: auto;
       font-style: normal;
-      font-size: 11px;
+      font-size: 10.5px;
       opacity: 0.55;
-      max-width: 46%;
+      max-width: 52%;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;

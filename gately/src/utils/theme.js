@@ -80,7 +80,7 @@ export function buildTheme(cfg, darkMode) {
   }
 
   // 指标小块的底色：深色底用一点白，浅色底用一点墨，否则浅色壁纸上会看不出块
-  const chipBg = () => (isDark ? 'rgba(255,255,255,0.055)' : 'rgba(15,23,42,0.045)');
+  const chipBg = () => (isDark ? 'rgba(255,255,255,0.055)' : 'rgba(15,23,42,0.062)');
 
   return {
     text,

@@ -1,7 +1,9 @@
 import { SunPanelPageElement } from '@sun-panel/micro-app';
 import { html, svg, css, nothing } from 'lit';
-import { gateway } from '../utils/gateway.js';
-import { setRequestAdapter, normalizeHost, hostOf } from '../utils/api.js';
+import { gateway, emptySnap } from '../utils/gateway.js';
+import { setRequestAdapter, normalizeHost } from '../utils/api.js';
+import { readConfig, serverLabel, serverHost, CONFIG_EVENT } from '../utils/servers.js';
+import { parseCertPem, certTitle } from '../utils/x509.js';
 import {
   fmtNum, fmtBytes, fmtBps, fmtDuration, fmtAgo, fmtClock, fmtDateTime, fmtPct, daysLeft, clamp, niceTop,
 } from '../utils/format.js';
@@ -32,8 +34,12 @@ function logo(size = 26) {
 export class GatelyMain extends SunPanelPageElement {
   static properties = {
     snap: { state: true },
+    servers: { state: true },
+    currentId: { state: true },
     tab: { state: true },
     stats: { state: true },
+    trend: { state: true },
+    trendErr: { state: true },
     certs: { state: true },
     bans: { state: true },
     ddns: { state: true },
@@ -51,9 +57,14 @@ export class GatelyMain extends SunPanelPageElement {
 
   constructor() {
     super();
-    this.snap = gateway.snap;
+    this.snap = emptySnap();
+    this.servers = [];
+    this.currentId = '';
+    this.store = null;
     this.tab = 'overview';
-    this.stats = null;
+    // 全站请求趋势（各站点 stats 按分钟合并），与单站点的 this.stats 不是一回事
+    this.trend = null;
+    this.trendErr = '';
     this.certs = null;
     this.bans = null;
     this.ddns = null;
@@ -68,43 +79,178 @@ export class GatelyMain extends SunPanelPageElement {
     this.banReason = '';
     this.ready = false;
     this._unsub = null;
-    this._detach = null;
+    this._unsubList = null;
+    this._trendTimer = null;
+    // 窗口打开时把所有台都挂上：切换条上的状态点和 QPS 才是实时的
+    this._detachers = [];
+    // 每台各存一份页面数据，切回来不用重新等
+    this._caches = {};
   }
 
   get base() {
-    return normalizeHost(gateway.conn?.host || '');
+    return normalizeHost(this.store?.server?.host || '');
   }
 
-  async onInitialized() {
+  get title() {
+    return this.store ? serverLabel(this.store.server) : 'Gately 网关';
+  }
+
+  async onInitialized(param) {
     const net = this.spCtx?.api?.network;
     if (net?.request) setRequestAdapter((opts) => net.request(opts));
     gateway.setTimerApi(this.spCtx?.api?.timer);
 
+    // 从某张卡片点进来时，直接打开它盯着的那台
+    const want = String(param?.customParam?.serverId || '');
+
     try {
       const dn = this.spCtx?.api?.dataNode?.user;
-      const [conn, settings] = await Promise.all([
-        dn?.getByKey('gately', 'conn'),
-        dn?.getByKey('gately', 'settings'),
-      ]);
-      if (conn) {
-        gateway.configure({ host: conn.host, token: conn.token, interval: settings?.refresh ?? conn.interval });
-      }
+      const conf = await readConfig(dn);
+      gateway.sync(conf.servers, { interval: conf.settings?.refresh, defaultId: conf.defaultId });
+      this.servers = gateway.list();
+      this._attachAll();
+      this._bind(want || conf.defaultId);
     } catch {
       /* 没配置时下面会显示空状态 */
     }
-    this.ready = true;
-    this._unsub = gateway.subscribe((snap) => {
-      this.snap = snap;
+
+    this._unsubList = gateway.subscribeList((list) => {
+      this.servers = list;
+      if (!this.store && list.length) this._bind(list[0].id);
     });
-    this._detach = gateway.attach();
-    if (gateway.configured) this._loadAll();
+
+    // 设置页保存后重读清单：可能加了台、删了台、改了名字
+    this._onSaved = () => this._reloadConfig();
+    try {
+      window.addEventListener(CONFIG_EVENT, this._onSaved);
+    } catch {
+      /* 非浏览器环境 */
+    }
+
+    this.ready = true;
+    if (this.store?.configured) {
+      this._loadAll();
+      // 趋势是分钟粒度的，60 秒补一次就够；页面在后台时跳过
+      const timer = this.spCtx?.api?.timer || window;
+      const set = timer.setInterval || window.setInterval.bind(window);
+      this._trendTimer = set(() => {
+        if (!document.hidden) this._loadTrend(true);
+      }, 60000);
+    }
   }
 
   onDisconnected() {
     this._unsub?.();
     this._unsub = null;
-    this._detach?.();
-    this._detach = null;
+    this._detachers?.forEach((fn) => fn());
+    this._detachers = [];
+    this._unsubList?.();
+    this._unsubList = null;
+    try {
+      window.removeEventListener(CONFIG_EVENT, this._onSaved);
+    } catch {
+      /* ignore */
+    }
+    if (this._msgTimer) clearTimeout(this._msgTimer);
+    if (this._trendTimer != null) {
+      const timer = this.spCtx?.api?.timer || window;
+      const clear = timer.clearInterval || window.clearInterval.bind(window);
+      clear(this._trendTimer);
+      this._trendTimer = null;
+    }
+  }
+
+  /** 设置页保存后重读清单 */
+  async _reloadConfig() {
+    try {
+      const dn = this.spCtx?.api?.dataNode?.user;
+      const conf = await readConfig(dn);
+      gateway.sync(conf.servers, { interval: conf.settings?.refresh, defaultId: conf.defaultId });
+      this.servers = gateway.list();
+      this._attachAll();
+      if (!this.servers.some((s) => s.id === this.currentId)) {
+        this._bind(this.servers[0]?.id);
+      } else {
+        this.requestUpdate();
+      }
+    } catch {
+      /* 读失败就维持现状 */
+    }
+  }
+
+  /**
+   * 所有台都订阅：切换条要显示每台的在线状态和 QPS，切过去也不用重新等。
+   * 一台 15 秒 3 个请求，三台也才 9 个，自托管足够轻。
+   */
+  _attachAll() {
+    this._detachers?.forEach((fn) => fn());
+    this._detachers = gateway.all().map((st) => st.attach());
+  }
+
+  /** 把界面绑到某一台上：换订阅、换缓存、必要时补一次请求 */
+  _bind(id) {
+    const store = gateway.get(id);
+    if (!store) {
+      // 清单被清空了：解开旧订阅，回到空状态，别继续显示上一台的数字
+      this._unsub?.();
+      this._unsub = null;
+      this.store = null;
+      this.currentId = '';
+      this.snap = emptySnap();
+      this.requestUpdate();
+      return;
+    }
+    if (store === this.store) return;
+    this._saveCache();
+    this._unsub?.();
+
+    this.store = store;
+    this.currentId = store.id;
+    this.snap = store.snap;
+    this._unsub = store.subscribe((snap) => {
+      this.snap = snap;
+      // snap 是同一个对象反复发，Lit 看不出变化；标题跟着 store.server.name 走，得手动刷新
+      this.requestUpdate();
+    });
+    this._restoreCache(store.id);
+
+    if (store.configured) {
+      // 缓存先顶上，新数据到了再替换，切换时不至于整页空白
+      this._loadAll();
+    }
+    this.requestUpdate();
+  }
+
+  _switch(id) {
+    if (id === this.currentId) return;
+    this.msg = null;
+    this._bind(id);
+  }
+
+  _saveCache() {
+    if (!this.store) return;
+    this._caches[this.store.id] = {
+      certs: this.certs,
+      bans: this.bans,
+      ddns: this.ddns,
+      logs: this.logs,
+      procs: this.procs,
+      trend: this.trend,
+      trendErr: this.trendErr,
+      errs: this.errs,
+    };
+  }
+
+  _restoreCache(id) {
+    const c = this._caches[id];
+    this.certs = c?.certs ?? null;
+    this.bans = c?.bans ?? null;
+    this.ddns = c?.ddns ?? null;
+    this.logs = c?.logs ?? null;
+    this.procs = c?.procs ?? null;
+    this.trend = c?.trend ?? null;
+    this.trendErr = c?.trendErr ?? '';
+    this.errs = c?.errs ? { ...c.errs } : {};
   }
 
   _say(text, kind = 'ok') {
@@ -116,37 +262,66 @@ export class GatelyMain extends SunPanelPageElement {
   }
 
   async _loadAll() {
-    if (!gateway.configured) return;
-    const c = gateway.client();
+    const store = this.store;
+    if (!store?.configured) return;
+    const c = store.client();
     const jobs = [
-      ['stats', () => c.stats(this.range)],
       ['certs', () => c.certs()],
       ['bans', () => c.bans()],
       ['ddns', () => c.ddns()],
       ['logs', () => c.logs(120)],
       ['procs', () => c.processes()],
     ];
+    // 切换服务器时静默刷新：先把缓存显示着，拿到新数据再换，避免整页闪一下
     await Promise.all(
       jobs.map(async ([key, run]) => {
         try {
           const v = await run();
+          if (this.store !== store) return; // 中途切走了，别把数据写到另一台头上
           this[key] = v;
           if (this.errs[key]) {
             this.errs = { ...this.errs, [key]: '' };
           }
         } catch (e) {
+          if (this.store !== store) return;
           this.errs = { ...this.errs, [key]: e?.message || String(e) };
           this[key] = null;
         }
       }),
     );
-    gateway.refresh();
+    // 趋势要靠拓扑里的站点列表定位 listener+site，所以等拓扑落定再取    await store.refresh();
+    this._loadTrend();
+    this._saveCache();
+  }
+
+  /** 全站请求趋势：各运行中站点的分钟级 stats 合并 */
+  async _loadTrend(force = false, attempt = 0) {
+    const store = this.store;
+    if (!store?.configured) return;
+    try {
+      const r = await store.fetchTrend(this.range, { force });
+      if (this.store !== store) return;
+      // 拓扑还没回来时拿不到站点清单（total=0），过一会儿再试，别就此留空
+      if (!r.total && attempt < 4) {
+        const set = this.spCtx?.api?.timer?.setTimeout || window.setTimeout.bind(window);
+        set(() => this._loadTrend(force, attempt + 1), 1000);
+        return;
+      }
+      this.trend = r;
+      this.trendErr = r.error || '';
+    } catch (e) {
+      if (this.store !== store) return;
+      this.trend = null;
+      this.trendErr = e?.message || String(e);
+    }
+    this._saveCache();
   }
 
   _reload(key) {
-    const c = gateway.client();
+    const store = this.store;
+    if (!store) return;
+    const c = store.client();
     const map = {
-      stats: () => c.stats(this.range),
       certs: () => c.certs(),
       bans: () => c.bans(),
       ddns: () => c.ddns(),
@@ -266,7 +441,9 @@ export class GatelyMain extends SunPanelPageElement {
     const enabled = sites.filter((x) => x.enable).length;
     const unhealthy = sites.filter((x) => x.upstreams.some((u) => !u.healthy)).length;
     const certs = Array.isArray(this.certs) ? this.certs : [];
-    const graded = certs.map((c) => ({ c, d: daysLeft(c?.info?.notAfter) })).filter((x) => x.d != null);
+    const graded = certs
+      .map((c) => ({ c, d: daysLeft(this._certMeta(c).notAfter) }))
+      .filter((x) => x.d != null);
     const nextCert =
       graded.filter((x) => x.d >= 0).sort((a, b) => a.d - b.d)[0] ||
       graded.sort((a, b) => b.d - a.d)[0];
@@ -316,7 +493,11 @@ export class GatelyMain extends SunPanelPageElement {
             </div>
           </div>
           ${this._trendChart()}
-          ${this._errBox('stats', '站点统计不可用')}
+          ${this.trend && this.trend.total && !this.trend.ok
+    ? html`<div class="warnbox">
+                站点统计未取到：${this.trend.error || '令牌可能缺少 webservice:read'}
+              </div>`
+    : ''}
         </div>
 
         <div class="card">
@@ -360,7 +541,7 @@ export class GatelyMain extends SunPanelPageElement {
             ${nextCert ? (nextCert.d >= 0 ? Math.round(nextCert.d) : '已过期') : '—'}
             <em>${nextCert ? (nextCert.d >= 0 ? '天后到期' : `${Math.abs(Math.round(nextCert.d))} 天`) : ''}</em>
           </div>
-          <div class="chint">${nextCert ? nextCert.c.name || nextCert.c.key : this.errs.certs || '没有证书'}</div>
+          <div class="chint">${nextCert ? certTitle(nextCert.c, this._certMeta(nextCert.c)) : this.errs.certs || '没有证书'}</div>
         </div>
         <div class="card tile">
           <div class="chead"><h3>封禁</h3><a class="link" @click=${() => (this.tab = 'bans')}>管理详情 ›</a></div>
@@ -377,35 +558,40 @@ export class GatelyMain extends SunPanelPageElement {
   }
 
   _setRange(m) {
+    if (m === this.range) return;
     this.range = m;
-    this.stats = null;
-    this._reload('stats');
+    this.trend = null;
+    this._loadTrend(true);
   }
 
   _trendChart() {
-    const st = this.stats;
-    if (st && Array.isArray(st.series) && st.series.length > 1) {
-      const times = st.series.map((p) => p.t);
-      return this._chart(
-        [
-          {
-            label: '请求数 / 分',
-            color: '#34d399',
-            fill: true,
-            values: st.series.map((p) => p.requests || 0),
-            times,
-            note: `合计 ${fmtNum(st.series.reduce((a, p) => a + (p.requests || 0), 0))}`,
-          },
-          {
-            label: '5xx',
-            color: '#fb7185',
-            dashed: true,
-            values: st.series.map((p) => p.s5xx || 0),
-            times,
-          },
-        ],
-        { height: '100%' },
-      );
+    const tr = this.trend;
+    if (tr && tr.series.length > 1) {
+      const times = tr.series.map((p) => p.t);
+      const sum = tr.series.reduce((a, p) => a + (p.requests || 0), 0);
+      const s5 = tr.series.reduce((a, p) => a + (p.s5xx || 0), 0);
+      const series = [
+        {
+          label: '请求数 / 分（全站合计）',
+          color: '#34d399',
+          fill: true,
+          values: tr.series.map((p) => p.requests || 0),
+          times,
+          note: `${tr.ok}/${tr.total} 个站点 · 合计 ${fmtNum(sum)}`,
+        },
+      ];
+      // 一条 5xx 都没有时不画，否则零值虚线会贴着底边，看着像基线
+      if (s5 > 0) {
+        series.push({
+          label: '5xx',
+          color: '#fb7185',
+          dashed: true,
+          values: tr.series.map((p) => p.s5xx || 0),
+          times,
+          note: `共 ${fmtNum(s5)}`,
+        });
+      }
+      return this._chart(series, { height: '100%' });
     }
     // 统计接口不可用时退回面板自己采的样
     const hist = (this.snap.hist || []).slice(-40);
@@ -430,7 +616,7 @@ export class GatelyMain extends SunPanelPageElement {
   _sites() {
     const g = this.snap.gateway;
     if (!g) {
-      return this._empty(this.errs.stats || 'Web 服务模块没有启用，或令牌缺少 webservice:read');
+      return this._empty('Web 服务模块没有启用，或令牌缺少 webservice:read');
     }
     const list = g.sites || [];
     if (!list.length) return this._empty('还没有站点。到 Gately 后台「Web 服务」里添加');
@@ -486,10 +672,11 @@ export class GatelyMain extends SunPanelPageElement {
     if (this.busy[key]) return;
     this.busy = { ...this.busy, [key]: true };
     try {
-      await gateway.client().setSiteEnabled({ listener: site.listener, site: site.key }, !site.enable);
+      await this.store.client().setSiteEnabled({ listener: site.listener, site: site.key }, !site.enable);
       this._say(`${site.name} 已${site.enable ? '停用' : '启用'}`, 'ok');
-      await gateway.refresh();
-      this._reload('stats');
+      await this.store.refresh();
+      // 站点启停会改变趋势的聚合范围
+      this._loadTrend(true);
     } catch (e) {
       this._say(e?.message || '操作失败', 'err');
     } finally {
@@ -500,28 +687,41 @@ export class GatelyMain extends SunPanelPageElement {
   }
 
   // ---------- 证书 ----------
+  /**
+   * 一张证书的到期时间、域名、签发者。
+   * 真实接口只返回 certPem，得自己解析；模拟器直接给 info，走前半段。
+   */
+  _certMeta(c) {
+    if (c?.info?.notAfter) {
+      return { notAfter: c.info.notAfter, domains: c.info.domains || [], issuer: c.info.issuer || '' };
+    }
+    return parseCertPem(c?.certPem) || { notAfter: '', domains: [], issuer: '' };
+  }
+
   _certs() {
     if (this.errs.certs) return this._empty(this.errs.certs);
     const list = Array.isArray(this.certs) ? this.certs : [];
     if (!list.length) return this._empty('还没有证书');
     return html`<div class="cards2">
       ${list.map((c) => {
-    const d = daysLeft(c?.info?.notAfter);
+    const meta = this._certMeta(c);
+    const d = daysLeft(meta.notAfter);
     const pct = d == null ? 0 : clamp((d / 90) * 100, 0, 100);
     const color = d == null ? '#94a3b8' : d < 0 ? '#f87171' : d < 14 ? '#fbbf24' : '#34d399';
     const busyKey = `cert:${c.key}`;
+    const domains = meta.domains.length ? meta.domains : c?.acme?.domains || [];
     return html`<div class="card cert">
           <div class="chead">
-            <h3>${c.name || c.key}</h3>
+            <h3>${certTitle(c, meta)}</h3>
             <span class="chint">${c.source === 'acme' ? 'ACME 自动签发' : c.source === 'upload' ? '手动上传' : c.source || ''}</span>
           </div>
-          <div class="cdom">${(c?.info?.domains || c?.acme?.domains || []).join('、') || '—'}</div>
+          <div class="cdom">${domains.join('、') || '—'}</div>
           <div class="kbar big"><i style="width:${pct}%;background:${color}"></i></div>
           <div class="cfoot">
             <span style="color:${color}">
               ${d == null ? '到期时间未知' : d < 0 ? `已过期 ${Math.abs(Math.round(d))} 天` : `剩 ${Math.round(d)} 天`}
             </span>
-            <span class="chint">${fmtDateTime(c?.info?.notAfter)} 到期</span>
+            <span class="chint">${meta.notAfter ? `${fmtDateTime(meta.notAfter)} 到期` : '没能读到到期时间'}</span>
             ${c.source === 'acme'
     ? html`<button class="mini-btn" ?disabled=${this.busy[busyKey]} @click=${() => this._renew(c)}>
                   ${this.busy[busyKey] ? '提交中…' : '立即续期'}
@@ -537,7 +737,7 @@ export class GatelyMain extends SunPanelPageElement {
     const key = `cert:${cert.key}`;
     this.busy = { ...this.busy, [key]: true };
     try {
-      await gateway.client().renewCert(cert.key);
+      await this.store.client().renewCert(cert.key);
       this._say('已提交签发请求，稍后刷新查看结果', 'ok');
     } catch (e) {
       this._say(e?.message || '续期失败', 'err');
@@ -604,12 +804,12 @@ export class GatelyMain extends SunPanelPageElement {
       return;
     }
     try {
-      await gateway.client().ban(ip, Number(this.banSec) || 0, this.banReason.trim() || '面板手动封禁');
+      await this.store.client().ban(ip, Number(this.banSec) || 0, this.banReason.trim() || '面板手动封禁');
       this.banIp = '';
       this.banReason = '';
       this._say('已封禁', 'ok');
       this._reload('bans');
-      gateway.refresh();
+      this.store.refresh();
     } catch (e) {
       this._say(e?.message || '封禁失败', 'err');
     }
@@ -617,10 +817,10 @@ export class GatelyMain extends SunPanelPageElement {
 
   async _unban(key) {
     try {
-      await gateway.client().unban(key);
+      await this.store.client().unban(key);
       this._say(`已解封 ${key}`, 'ok');
       this._reload('bans');
-      gateway.refresh();
+      this.store.refresh();
     } catch (e) {
       this._say(e?.message || '解封失败', 'err');
     }
@@ -647,17 +847,21 @@ export class GatelyMain extends SunPanelPageElement {
     const s = this.snap;
     const g = s.gateway;
     const ok = s.phase === 'ok';
+    const name = this.title;
+    // 主机名和自己起的名字不一样时才补一句，方便确认这是哪台机器
+    const hostNote = s.hostname && s.hostname !== name ? s.hostname : '';
     return html`
       <div class="hdr">
         <div class="hid">
           ${logo(30)}
           <div class="hmeta">
             <div class="hname">
-              ${s.hostname || hostOf(this.base) || 'Gately'}
+              ${name}
               ${s.version ? html`<span class="ver">${s.version}</span>` : ''}
             </div>
             <div class="hsub">
-              ${this.base ? html`<span>${this.base.replace(/^https?:\/\//, '')}</span>` : html`<span>还没有配置</span>`}
+              ${this.base ? html`<span>${serverHost(this.store?.server)}</span>` : html`<span>还没有配置</span>`}
+              ${hostNote ? html`<span>· ${hostNote}</span>` : ''}
               ${s.ts ? html`<span>· 最后更新 ${fmtAgo(s.ts / 1000)}</span>` : ''}
             </div>
           </div>
@@ -679,11 +883,36 @@ export class GatelyMain extends SunPanelPageElement {
     `;
   }
 
+  /** 多台服务器时的切换条；只有一台就整行不出现 */
+  _serverBar() {
+    if (this.servers.length < 2) return '';
+    return html`
+      <div class="srvbar">
+        ${this.servers.map((sv) => {
+    const st = gateway.get(sv.id);
+    const snap = st?.snap;
+    const phase = snap?.phase;
+    const dot = !st?.configured ? 'idle' : phase === 'error' ? 'no' : phase === 'ok' ? 'ok' : 'idle';
+    const qps = snap?.gateway ? fmtNum(snap.gateway.qps) : '';
+    return html`<button
+            class="srvtab ${sv.id === this.currentId ? 'on' : ''}"
+            title=${sv.host}
+            @click=${() => this._switch(sv.id)}
+          >
+            <i class="dot ${dot}"></i>
+            <span class="sn">${serverLabel(sv)}</span>
+            ${qps ? html`<em>${qps} QPS</em>` : ''}
+          </button>`;
+  })}
+      </div>
+    `;
+  }
+
   render() {
     if (!this.ready) {
       return html`<div class="wrap"><div class="blank">载入中…</div></div>`;
     }
-    if (!gateway.configured) {
+    if (!this.store?.configured) {
       return html`<div class="wrap">
         <div class="hdr">
           <div class="hid">${logo(30)}<div class="hmeta"><div class="hname">Gately 网关</div>
@@ -706,6 +935,7 @@ export class GatelyMain extends SunPanelPageElement {
     return html`
       <div class="wrap">
         ${this._header()}
+        ${this._serverBar()}
         <div class="tabs">
           ${TABS.map(
     (t) => html`<button class="tab ${this.tab === t.id ? 'on' : ''}" @click=${() => (this.tab = t.id)}>
@@ -895,6 +1125,52 @@ export class GatelyMain extends SunPanelPageElement {
       line-height: 1.55;
     }
 
+    /* 多台服务器时的切换条 */
+    .srvbar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .srvtab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 11px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      background: rgba(255, 255, 255, 0.035);
+      color: rgba(255, 255, 255, 0.66);
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      max-width: 210px;
+    }
+    .srvtab:hover {
+      background: rgba(255, 255, 255, 0.07);
+      color: #eef4f5;
+    }
+    .srvtab.on {
+      background: rgba(52, 211, 153, 0.14);
+      border-color: rgba(52, 211, 153, 0.42);
+      color: #eafff7;
+    }
+    .srvtab .sn {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .srvtab em {
+      font-style: normal;
+      font-size: 10.5px;
+      color: rgba(255, 255, 255, 0.42);
+      font-variant-numeric: tabular-nums;
+      flex: none;
+    }
+    .srvtab.on em {
+      color: rgba(234, 255, 247, 0.62);
+    }
     .tabs {
       display: flex;
       gap: 4px;
@@ -1122,9 +1398,10 @@ export class GatelyMain extends SunPanelPageElement {
     .xaxis {
       display: flex;
       justify-content: space-between;
-      font-size: 9px;
-      color: rgba(255, 255, 255, 0.28);
-      margin-top: 3px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.42);
+      margin-top: 6px;
+      font-variant-numeric: tabular-nums;
     }
     .legend {
       display: flex;
