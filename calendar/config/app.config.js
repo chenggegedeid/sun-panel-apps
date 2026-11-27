@@ -13,7 +13,7 @@ export default {
   // 应用唯一标识（必须与商店里已建应用的 ID 完全一致，注意大写 C）
   microAppId: 'chenggegedeid-Calendar',
   // 应用版本
-  version: '1.1.0',
+  version: '1.1.1',
   // 入口文件
   entry: 'main.js',
   // 图标（放在 public 目录）

@@ -123,7 +123,19 @@ export class WidgetConfig extends SunPanelPageElement {
   }
 
   _removeEvent(id) {
-    this.events = this.events.filter((e) => e.id !== id);
+    // 两步确认，避免误删生日这类长期事件（不用 window.confirm，弹窗在微应用里常被拦）
+    if (this._pendingDel === id) {
+      this.events = this.events.filter((e) => e.id !== id);
+      this._pendingDel = null;
+      clearTimeout(this._delTimer);
+      return;
+    }
+    this._pendingDel = id;
+    clearTimeout(this._delTimer);
+    this._delTimer = setTimeout(() => {
+      this._pendingDel = null;
+      this.requestUpdate();
+    }, 3000);
   }
 
   async handleSave() {
@@ -260,7 +272,13 @@ export class WidgetConfig extends SunPanelPageElement {
                           placeholder="事件名称"
                           @input=${(ev) => this._updateEvent(e.id, { title: ev.target.value })}
                         />
-                        <button class="del" title="删除" @click=${() => this._removeEvent(e.id)}>×</button>
+                        <button
+                          class="del ${this._pendingDel === e.id ? 'confirm' : ''}"
+                          title=${this._pendingDel === e.id ? '再点一次确认删除' : '删除'}
+                          @click=${() => this._removeEvent(e.id)}
+                        >
+                          ${this._pendingDel === e.id ? '确认删除' : '×'}
+                        </button>
                       </div>
                       <div class="item-row">
                         <div class="cal-switch">
@@ -572,6 +590,18 @@ export class WidgetConfig extends SunPanelPageElement {
       border-radius: 10px;
       padding: 8px 10px;
       background: rgba(255, 255, 255, 0.6);
+    }
+    .del.confirm {
+      width: auto;
+      padding: 0 8px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      background: rgba(220, 38, 38, 0.1);
+      color: #dc2626;
+    }
+    .dark .del.confirm {
+      background: rgba(248, 113, 113, 0.16);
+      color: #fca5a5;
     }
     .item-row {
       display: flex;
