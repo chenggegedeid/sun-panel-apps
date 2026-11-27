@@ -221,6 +221,14 @@ build/make-icon.mjs      # 图标生成（纯 Node 手写 PNG，可出多种方�
 
 ---
 
+## 安全说明
+
+应用商店静态扫描会对 `main.js` 提示 `innerHTML` 与 `fetch`。两者的来源、必要性和风险判断写在这里：[SECURITY.md](SECURITY.md)。
+
+简要结论：`fetch` 只访问用户自己填写的音乐服务器（`credentials: 'omit'`，不带 Cookie）；`innerHTML` 来自 lit-html 的模板解析，输入是编译期静态字符串。全包无 `eval`、`document.write`、`localStorage`、第三方域名。
+
+---
+
 ## 许可证
 
 **禁止商业使用。** 个人可免费使用、修改；分发需保留署名与许可证，修改后须标注「已修改」并同样禁止商用。
