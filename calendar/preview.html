@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>日历倒计时 · 尺寸与透明度预览</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 28px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        color: #0f172a;
+        background:
+          radial-gradient(1200px 600px at 8% 12%, rgba(56, 189, 248, 0.85), transparent 60%),
+          radial-gradient(900px 700px at 92% 18%, rgba(167, 139, 250, 0.8), transparent 62%),
+          radial-gradient(900px 800px at 70% 95%, rgba(251, 146, 60, 0.75), transparent 60%),
+          radial-gradient(700px 600px at 20% 88%, rgba(16, 185, 129, 0.6), transparent 62%),
+          linear-gradient(150deg, #0b1220 0%, #1e293b 45%, #334155 100%);
+        min-height: 100vh;
+      }
+      h1 { font-size: 15px; font-weight: 600; color: #fff; margin: 0 0 4px; }
+      .sub { font-size: 12px; color: rgba(255, 255, 255, 0.6); margin: 0 0 22px; }
+      h2 {
+        font-size: 12px; font-weight: 500; color: #fff; margin: 26px 0 10px;
+        display: flex; align-items: center; gap: 8px;
+      }
+      h2::after { content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.18); }
+      .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+      .slot { display: flex; flex-direction: column; gap: 5px; }
+      .slot > span { font-size: 10px; color: rgba(255, 255, 255, 0.55); letter-spacing: 0.04em; }
+      .card { border-radius: 14px; overflow: hidden; }
+      .dark { background: rgba(9, 12, 20, 0.55); padding: 14px; border-radius: 16px; }
+      .full { width: 100%; }
+    </style>
+  </head>
+  <body>
+    <h1>日历倒计时 · 尺寸 / 透明度预览</h1>
+    <p class="sub">卡片外层故意不加任何底色，用来验证「透明」是否真的透出壁纸。</p>
+
+    <div id="app"></div>
+
+    <script type="module">
+      import { Widget } from './src/components/widget.js';
+
+      const EVENTS = [
+        { id: '1', title: '我的生日', date: '1996-05-02', type: 'birthday', yearly: true, emoji: '🎂' },
+        { id: '2', title: '结婚纪念日', date: '2023-10-20', type: 'anniversary', yearly: true, emoji: '💗' },
+        { id: '3', title: '妈妈生日', date: '1968-03-12', type: 'birthday', yearly: true, emoji: '🎂' },
+        { id: '4', title: '项目上线', date: '2026-12-15', type: 'reminder', yearly: false, emoji: '📌' },
+      ];
+
+      const SIZES = {
+        '1x1': [110, 110],
+        '1x2': [110, 222],
+        '2x1': [222, 110],
+        '2x2': [222, 222],
+        '2x4': [444, 222],
+        '4x4': [444, 444],
+        '1xfull': ['100%', 110],
+      };
+
+      const api = {
+        timer: {
+          setInterval: (fn, ms) => window.setInterval(fn, ms),
+          clearInterval: (id) => window.clearInterval(id),
+          setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+          clearTimeout: (id) => window.clearTimeout(id),
+        },
+        dataNode: {
+          user: { getByKey: async () => EVENTS, setByKey: async () => {} },
+        },
+        widget: { save: async (d) => console.log('save', d) },
+        window: { open: (o) => console.log('open', o), close: () => {} },
+      };
+
+      if (!customElements.get('cal-widget')) customElements.define('cal-widget', Widget);
+
+      const mount = (parent, size, config, darkMode) => {
+        const [w, h] = SIZES[size];
+        const slot = document.createElement('div');
+        slot.className = 'slot' + (size === '1xfull' ? ' full' : '');
+        const label = document.createElement('span');
+        label.textContent = size;
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.style.width = typeof w === 'number' ? w + 'px' : w;
+        card.style.height = h + 'px';
+        if (size === '1xfull') card.style.width = '100%';
+
+        const el = document.createElement('cal-widget');
+        el.style.display = 'block';
+        el.style.height = '100%';
+        el.spCtx = {
+          api,
+          darkMode,
+          language: 'zh-CN',
+          networkMode: 'LAN',
+          staticPath: '/',
+          role: 2,
+          widgetInfo: {
+            widgetId: 'demo-' + size + '-' + Math.random().toString(36).slice(2, 6),
+            config,
+            gridSize: size,
+            title: '日历倒计时',
+            background: 'transparent',
+          },
+        };
+        card.appendChild(el);
+        slot.append(label, card);
+        parent.appendChild(slot);
+      };
+
+      const app = document.getElementById('app');
+      const transparent = { bgMode: 'transparent', accent: '#0ea5e9', textMode: 'light', showLunar: true, textShadow: true };
+      const frosted = { ...transparent, bgMode: 'frosted', bgColor: '#0b1220', bgOpacity: 30, textMode: 'light' };
+      const solid = { ...transparent, bgMode: 'solid', bgColor: '#0b1220', bgOpacity: 72, textMode: 'light' };
+
+      const sec = (title) => {
+        const h2 = document.createElement('h2');
+        h2.textContent = title;
+        app.appendChild(h2);
+        const row = document.createElement('div');
+        row.className = 'row';
+        app.appendChild(row);
+        return row;
+      };
+
+      const r1 = sec('完全透明 · 深色文字关闭');
+      Object.keys(SIZES).forEach((s) => mount(r1, s, transparent, false));
+
+      const r2 = sec('毛玻璃 30%');
+      ['2x2', '2x4', '1xfull'].forEach((s) => mount(r2, s, frosted, false));
+
+      const r3 = sec('纯色 72%');
+      ['2x2', '1xfull'].forEach((s) => mount(r3, s, solid, false));
+
+      const r4 = sec('深色模式 · 完全透明');
+      Object.keys(SIZES).forEach((s) => mount(r4, s, { ...transparent, textMode: 'auto' }, true));
+
+      // 页面组件（配置页 / 主页）
+      import('./src/components/widgetConfig.js').then(({ WidgetConfig }) => {
+        if (!customElements.get('cal-config')) customElements.define('cal-config', WidgetConfig);
+        const row = sec('配置页');
+        const box = document.createElement('div');
+        box.style.cssText = 'width:780px;height:700px;background:linear-gradient(160deg,#eef4fb,#f7f4fb);border-radius:14px;overflow:hidden;';
+        const el = document.createElement('cal-config');
+        el.style.cssText = 'display:block;height:100%;';
+        el.spCtx = {
+          api,
+          darkMode: false,
+          language: 'zh-CN',
+          staticPath: '/',
+          widgetInfo: { widgetId: 'cfg', config: { bgMode: 'transparent', accent: '#0ea5e9' }, gridSize: '2x2', title: '日历' },
+          customParam: {},
+        };
+        box.appendChild(el);
+        row.appendChild(box);
+      });
+
+      import('./src/components/mainPage.js').then(({ MainPage }) => {
+        if (!customElements.get('cal-main')) customElements.define('cal-main', MainPage);
+        const row = sec('主页面');
+        const box = document.createElement('div');
+        box.style.cssText = 'width:880px;height:520px;background:linear-gradient(160deg,#eef4fb,#f7f4fb);border-radius:14px;overflow:hidden;';
+        const el = document.createElement('cal-main');
+        el.style.cssText = 'display:block;height:100%;';
+        el.spCtx = {
+          api,
+          darkMode: false,
+          language: 'zh-CN',
+          staticPath: '/',
+          widgetInfo: { widgetId: 'main', config: {}, gridSize: '2x2', title: '日历' },
+          customParam: {},
+        };
+        box.appendChild(el);
+        row.appendChild(box);
+      });
+    </script>
+  </body>
+</html>

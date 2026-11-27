@@ -1,0 +1,9 @@
+node_modules
+dist
+.history
+packages/
+.DS_Store
+.template-sync-info.json
+
+# 由 npm run icon 生成（build/make-icon.mjs），二进制不进仓库
+public/icon.png

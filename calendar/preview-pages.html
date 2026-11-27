@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>日历倒计时 · 页面预览</title>
+    <style>
+      body {
+        margin: 0; padding: 22px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        background: #e9eef5;
+      }
+      h2 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: #334155; }
+      .box { border-radius: 14px; overflow: hidden; box-shadow: 0 8px 30px rgba(15, 23, 42, 0.12); }
+      .row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+    </style>
+  </head>
+  <body>
+    <h2>配置页 · 事件管理 + 外观（缩放到 74% 以便一屏查看）</h2>
+    <div style="zoom: 0.6">
+      <div class="box" id="cfg-box" style="width: 780px; height: 1150px"></div>
+    </div>
+
+    <h2>主页面 · 月历 + 即将到来</h2>
+    <div class="box" id="main-box" style="width: 880px; height: 520px"></div>
+
+    <script type="module">
+      import { WidgetConfig } from './src/components/widgetConfig.js';
+      import { MainPage } from './src/components/mainPage.js';
+
+      const EVENTS = [
+        { id: '1', title: '我的生日', date: '1996-05-02', type: 'birthday', yearly: true, emoji: '🎂' },
+        { id: '2', title: '结婚纪念日', date: '2023-10-20', type: 'anniversary', yearly: true, emoji: '💗' },
+        { id: '3', title: '妈妈生日', date: '1968-03-12', type: 'birthday', yearly: true, emoji: '🎂' },
+        { id: '4', title: '项目上线', date: '2026-12-15', type: 'reminder', yearly: false, emoji: '📌' },
+      ];
+
+      const api = {
+        timer: { setInterval: (f, m) => setInterval(f, m), clearInterval: (i) => clearInterval(i) },
+        dataNode: { user: { getByKey: async () => EVENTS, setByKey: async () => {} } },
+        widget: { save: async (d) => console.log('save', d) },
+        window: { open: (o) => console.log('open', o), close: () => {} },
+      };
+
+      if (!customElements.get('cal-main')) customElements.define('cal-main', MainPage);
+      if (!customElements.get('cal-config')) customElements.define('cal-config', WidgetConfig);
+
+      const main = document.createElement('cal-main');
+      main.style.cssText = 'display:block;height:100%;';
+      main.spCtx = { api, darkMode: false, language: 'zh-CN', staticPath: '/', widgetInfo: { config: {} } };
+      document.getElementById('main-box').appendChild(main);
+
+      const cfg = document.createElement('cal-config');
+      cfg.style.cssText = 'display:block;height:100%;';
+      cfg.spCtx = {
+        api, darkMode: false, language: 'zh-CN', staticPath: '/',
+        widgetInfo: { widgetId: 'cfg', config: { bgMode: 'transparent', accent: '#0ea5e9', textMode: 'auto' }, gridSize: '2x2' },
+        customParam: {},
+      };
+      document.getElementById('cfg-box').appendChild(cfg);
+    </script>
+  </body>
+</html>

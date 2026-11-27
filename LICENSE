@@ -1,0 +1,47 @@
+# 许可证 · License
+
+**音乐（Sun-Panel 微应用）· 禁止商业使用**
+
+Copyright (c) 2026 chenggegedeid
+
+---
+
+## 中文（以本段为准）
+
+本软件及相关源代码、文档、图标等资源（下称「本作品」）免费提供给个人使用，但**禁止任何形式的商业使用**。
+
+### 允许
+
+- 个人在自有的 Sun-Panel 面板上安装、使用本作品
+- 阅读、学习、修改源代码
+- 在保留本许可证、作者署名和原始仓库链接的前提下，分享未修改的副本
+- 在非商业的个人博客、视频、文章中介绍和推荐本作品
+
+### 禁止
+
+- **任何商业用途**，包括但不限于：销售本作品或其修改版、将其打包进付费产品或服务、以收费方式提供访问、随硬件设备捆绑销售
+- **二次商用分发**：将本作品（含修改版）上传到任何应用商店、软件分发平台或付费渠道，并从中获利
+- 移除或篡改本许可证、作者署名、版权声明
+- 将本作品用于提供收费的技术支持服务并以此作为主要卖点，而未获得书面授权
+
+### 其他
+
+- 修改后分发，必须同样采用本许可证，并显著标注「已修改」及修改内容
+- 本作品按「现状」提供，不附带任何明示或暗示的担保；因使用本作品造成的任何损失，作者不承担责任
+- 需要商业授权（含企业内部使用、随产品分发、定制开发），请通过下列方式联系作者取得书面许可
+
+**联系方式**：GitHub [@chenggegedeid](https://github.com/chenggegedeid) · 邮箱 contact@example.com
+
+---
+
+## English (summary)
+
+This software is free for **personal, non-commercial use only**. Commercial use of any kind is **prohibited**, including selling, bundling with paid products or services, charging for access, or redistributing a modified version for profit.
+
+You may read, study, modify the source, and share unmodified copies provided this license, the author's attribution and the link to the original repository are kept.
+
+Modified versions must be distributed under this same license with clear notice of the changes.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. THE AUTHOR IS NOT LIABLE FOR ANY DAMAGES ARISING FROM ITS USE.
+
+For commercial licensing, please contact the author via GitHub [@chenggegedeid](https://github.com/chenggegedeid) or contact@example.com.

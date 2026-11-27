@@ -1,0 +1,11 @@
+node_modules
+dist
+.history
+packages/
+.DS_Store
+.template-sync-info.json
+__pycache__/
+*.pyc
+
+# 图标是生成物，但仓库里保留一份，方便别人直接构建
+# (build/make-icon.mjs 可重新生成)

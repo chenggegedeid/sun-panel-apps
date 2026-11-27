@@ -1,0 +1,14 @@
+# 各应用自己的忽略规则位于 calendar/.gitignore、music/.gitignore
+# 这里放仓库级规则
+
+node_modules/
+dist/
+packages/
+.DS_Store
+Thumbs.db
+*.log
+__pycache__/
+*.pyc
+.vscode/
+.template-sync-info.json
+.history/

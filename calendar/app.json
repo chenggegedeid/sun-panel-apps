@@ -1,0 +1,74 @@
+{
+  "appJsonVersion": "1.1",
+  "author": "chenggegedeid",
+  "version": "1.0.3",
+  "entry": "main.js",
+  "icon": "icon.png",
+  "debug": false,
+  "appInfo": {
+    "appName": "$t:APP_NAME",
+    "description": "$t:APP_DESCRIPTION",
+    "networkDescription": "$t:NETWORK_DESCRIPTION"
+  },
+  "locales": {
+    "zh-CN": "zh-CN.json",
+    "en-US": "en-US.json"
+  },
+  "defaultLocale": "zh-CN",
+  "permissions": [
+    "dataNode"
+  ],
+  "networkDomains": [],
+  "dataNodes": {
+    "events": {
+      "scope": "user",
+      "isPublic": false
+    }
+  },
+  "microAppId": "chenggegedeid-Calendar",
+  "apiVersion": "1.0.19",
+  "components": {
+    "pages": {
+      "calendar-config": {
+        "type": "config",
+        "background": "linear-gradient(160deg, #eef4fb 0%, #f7f4fb 100%)",
+        "backgroundDark": "linear-gradient(160deg, #1a1f26 0%, #221d29 100%)",
+        "headerTextColor": "#15171a",
+        "headerTextColorDark": "#f2f2f7",
+        "width": 780,
+        "height": 760,
+        "resize": true
+      },
+      "calendar-main": {
+        "type": "main",
+        "background": "linear-gradient(160deg, #eef4fb 0%, #f7f4fb 100%)",
+        "backgroundDark": "linear-gradient(160deg, #1a1f26 0%, #221d29 100%)",
+        "headerTextColor": "#15171a",
+        "headerTextColorDark": "#f2f2f7",
+        "width": 880,
+        "height": 600,
+        "showFullscreenBtn": true,
+        "resize": true
+      }
+    },
+    "widgets": {
+      "calendar-widget": {
+        "configComponentName": "calendar-config",
+        "size": [
+          "1x1",
+          "1x2",
+          "2x1",
+          "2x2",
+          "2x4",
+          "4x4",
+          "1xfull"
+        ],
+        "background": "transparent",
+        "isModifyBackground": true,
+        "widgetName": "$t:WIDGET_NAME",
+        "widgetDescription": "$t:WIDGET_DESCRIPTION",
+        "sort": 20
+      }
+    }
+  }
+}
